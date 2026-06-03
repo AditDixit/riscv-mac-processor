@@ -98,5 +98,52 @@ Semantics: `rd = rd + (rs1 × rs2)`
 | tb_riscv_single | 12 | PASS |
 | tb_riscv_pipeline | 14 | PASS |
 | tb_benchmark | 2 | PASS |
+
+
+---
+
+## Author
+
+**Aditya Dixit**
+B.Tech / M.Tech — Electronics & Communication 
+*Department of electronics and communication, Vit Vellore*
+
+
+---
+
+## References
+
+### Books
+- Patterson, D. A., & Hennessy, J. L. (2020). *Computer Organization and Design:
+  RISC-V Edition* (2nd ed.). Morgan Kaufmann.
+  — Primary reference for the 5-stage pipeline datapath and hazard handling.
+
+- Harris, S., & Harris, D. (2021). *Digital Design and Computer Architecture:
+  RISC-V Edition*. Morgan Kaufmann.
+  — Reference for Verilog HDL design patterns and control unit structure.
+
+### Specifications
+- RISC-V International. (2019). *The RISC-V Instruction Set Manual, Volume I:
+  Unprivileged ISA, Version 20191213*.
+  https://riscv.org/technical/specifications/
+  — Official ISA specification: instruction encoding, opcode map, custom opcode space.
+
+- RISC-V International. (2019). *The RISC-V Instruction Set Manual — M Standard
+  Extension for Integer Multiplication and Division*.
+  https://riscv.org/technical/specifications/
+  — Reference for MUL/DIV encoding (funct7 = 0000001).
+
+### Papers & Articles
+- Hennessy, J. L., & Patterson, D. A. (2019). *A new golden age for computer
+  architecture*. Communications of the ACM, 62(2), 48–60.
+  https://doi.org/10.1145/3282307
+  — Motivation for domain-specific ISA extensions and custom accelerators.
+
+- Jouppi, N. P., et al. (2017). *In-datacenter performance analysis of a tensor
+  processing unit*. Proceedings of ISCA 2017.
+  https://doi.org/10.1145/3079856.3080246
+  — Real-world example of MAC-based domain-specific acceleration (Google TPU).
+
+
 | **Total** | **142** | **ALL PASS** |
 
