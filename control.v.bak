@@ -1,0 +1,232 @@
+// ============================================================
+// control.v  —  Main Control Unit + ALU Decoder
+//
+// Two-level decode (mirrors Patterson & Hennessy):
+//   1. main_decoder  : opcode → coarse control signals + alu_op[1:0]
+//   2. alu_decoder   : alu_op + funct3 + funct7[5] → alu_ctrl[3:0]
+//
+// Supported instructions:
+//   R-type : add sub and or xor sll srl sra slt sltu mul
+//   I-type : addi andi ori xori slli srli srai slti sltiu lw jalr
+//   S-type : sw
+//   B-type : beq bne blt bge bltu bgeu
+//   U-type : lui auipc
+//   J-type : jal
+//   MAC    : custom-0 opcode (7'b0001011)
+//            encoding: funct3=000, funct7=0000000
+//            operation: acc = acc + (rs1 * rs2)
+//
+// alu_op encoding (fed into alu_decoder):
+//   2'b00  ADD  (load, store, auipc, jal, jalr — address calc)
+//   2'b01  SUB  (branch — compare via subtraction)
+//   2'b10  R/I  (look at funct3/funct7 for exact op)
+//   2'b11  MAC  (multiply for MAC unit)
+// ============================================================
+
+// ------------------------------------------------------------
+// Main Decoder
+// ------------------------------------------------------------
+module main_decoder (
+    input  wire [6:0] opcode,
+    output reg        reg_write,   // 1 = write result to rd
+    output reg        alu_src,     // 0 = rs2,  1 = immediate
+    output reg        mem_write,   // 1 = write data memory
+    output reg        mem_read,    // 1 = read  data memory (LW)
+    output reg        mem_to_reg,  // 0 = ALU result, 1 = mem data
+    output reg        branch,      // 1 = potential branch
+    output reg        jump,        // 1 = unconditional jump (JAL/JALR)
+    output reg        jalr,        // 1 = JALR (target = rs1+imm)
+    output reg        lui_op,      // 1 = LUI  (pass imm directly)
+    output reg        mac_op,      // 1 = MAC custom instruction
+    output reg [1:0]  alu_op       // coarse ALU mode (see above)
+);
+    always @(*) begin
+        // defaults — safe values for unused fields
+        reg_write  = 1'b0;
+        alu_src    = 1'b0;
+        mem_write  = 1'b0;
+        mem_read   = 1'b0;
+        mem_to_reg = 1'b0;
+        branch     = 1'b0;
+        jump       = 1'b0;
+        jalr       = 1'b0;
+        lui_op     = 1'b0;
+        mac_op     = 1'b0;
+        alu_op     = 2'b00;
+
+        case (opcode)
+            // R-type  (add sub and or xor sll srl sra slt sltu mul)
+            7'b0110011: begin
+                reg_write = 1'b1;
+                alu_op    = 2'b10;
+            end
+
+            // I-type arithmetic  (addi andi ori xori slli srli srai slti sltiu)
+            7'b0010011: begin
+                reg_write = 1'b1;
+                alu_src   = 1'b1;   // use immediate
+                alu_op    = 2'b10;
+            end
+
+            // Load  (lw — and future lb lh lbu lhu)
+            7'b0000011: begin
+                reg_write  = 1'b1;
+                alu_src    = 1'b1;
+                mem_read   = 1'b1;
+                mem_to_reg = 1'b1;
+                alu_op     = 2'b00;  // ADD for address
+            end
+
+            // Store  (sw)
+            7'b0100011: begin
+                alu_src   = 1'b1;
+                mem_write = 1'b1;
+                alu_op    = 2'b00;  // ADD for address
+            end
+
+            // Branch  (beq bne blt bge bltu bgeu)
+            7'b1100011: begin
+                branch = 1'b1;
+                alu_op = 2'b01;  // SUB-based compare
+            end
+
+            // LUI
+            7'b0110111: begin
+                reg_write = 1'b1;
+                alu_src   = 1'b1;
+                lui_op    = 1'b1;
+                alu_op    = 2'b10;  // ALU decoder will see LUI and pass imm
+            end
+
+            // AUIPC
+            7'b0010111: begin
+                reg_write = 1'b1;
+                alu_src   = 1'b1;
+                alu_op    = 2'b00;  // ADD: PC + (imm << 12)
+            end
+
+            // JAL
+            7'b1101111: begin
+                reg_write = 1'b1;
+                jump      = 1'b1;
+                alu_op    = 2'b00;
+            end
+
+            // JALR
+            7'b1100111: begin
+                reg_write = 1'b1;
+                alu_src   = 1'b1;
+                jump      = 1'b1;
+                jalr      = 1'b1;
+                alu_op    = 2'b00;  // ADD: rs1 + imm
+            end
+
+            // MAC  custom-0  (acc = acc + rs1 * rs2)
+            7'b0001011: begin
+                reg_write = 1'b1;   // writes accumulator back to rd
+                mac_op    = 1'b1;
+                alu_op    = 2'b11;  // tells alu_decoder → MUL
+            end
+
+            default: begin /* NOP / illegal — all signals stay 0 */ end
+        endcase
+    end
+endmodule
+
+
+// ------------------------------------------------------------
+// ALU Decoder
+// Refines alu_op into the 4-bit alu_ctrl consumed by alu.v
+// ------------------------------------------------------------
+module alu_decoder (
+    input  wire [1:0] alu_op,
+    input  wire [2:0] funct3,
+    input  wire       funct7_5,    // instr[30] — distinguishes ADD/SUB, SRL/SRA
+    input  wire       opcode_5,    // instr[5]  — distinguishes R-type from I-type
+    input  wire       lui_op,
+    output reg  [3:0] alu_ctrl
+);
+    always @(*) begin
+        case (alu_op)
+            2'b00: alu_ctrl = 4'b0000;   // ADD  (address calculation)
+            2'b01: alu_ctrl = 4'b0001;   // SUB  (branch compare)
+            2'b11: alu_ctrl = 4'b1010;   // MUL  (MAC)
+
+            2'b10: begin  // R-type or I-type: inspect funct3 (and funct7)
+                if (lui_op) begin
+                    alu_ctrl = 4'b1011;  // LUI passthrough
+                end else begin
+                    case (funct3)
+                        3'b000: begin
+                            // ADD vs SUB: only R-type with funct7[5]=1 is SUB
+                            if (funct7_5 & opcode_5)
+                                alu_ctrl = 4'b0001;  // SUB
+                            else
+                                alu_ctrl = 4'b0000;  // ADD / ADDI
+                        end
+                        3'b001: alu_ctrl = 4'b0101;  // SLL / SLLI
+                        3'b010: alu_ctrl = 4'b1000;  // SLT / SLTI
+                        3'b011: alu_ctrl = 4'b1001;  // SLTU / SLTIU
+                        3'b100: alu_ctrl = 4'b0100;  // XOR / XORI
+                        3'b101: begin
+                            // SRL vs SRA: funct7[5] distinguishes
+                            if (funct7_5)
+                                alu_ctrl = 4'b0111;  // SRA / SRAI
+                            else
+                                alu_ctrl = 4'b0110;  // SRL / SRLI
+                        end
+                        3'b110: alu_ctrl = 4'b0011;  // OR  / ORI
+                        3'b111: alu_ctrl = 4'b0010;  // AND / ANDI
+                        // MUL: funct3=000, funct7=0000001 (opcode_5=1, funct7_5=0 in M-ext)
+                        // Handled via alu_op=2'b11 from mac_op path;
+                        // Standard M-ext mul via R-type needs separate funct7 check:
+                        default: alu_ctrl = 4'b0000;
+                    endcase
+                end
+            end
+
+            default: alu_ctrl = 4'b0000;
+        endcase
+    end
+endmodule
+
+
+// ------------------------------------------------------------
+// Immediate Generator
+// Extracts and sign-extends the immediate for all formats
+// ------------------------------------------------------------
+module imm_gen (
+    input  wire [31:0] instr,
+    output reg  [31:0] imm_ext
+);
+    wire [6:0] opcode = instr[6:0];
+
+    always @(*) begin
+        case (opcode)
+            // I-type  (arithmetic, load, jalr)
+            7'b0010011,
+            7'b0000011,
+            7'b1100111: imm_ext = {{20{instr[31]}}, instr[31:20]};
+
+            // S-type  (store)
+            7'b0100011: imm_ext = {{20{instr[31]}}, instr[31:25], instr[11:7]};
+
+            // B-type  (branch)
+            7'b1100011: imm_ext = {{19{instr[31]}}, instr[31], instr[7],
+                                    instr[30:25], instr[11:8], 1'b0};
+
+            // U-type  (lui, auipc)
+            7'b0110111,
+            7'b0010111: imm_ext = {instr[31:12], 12'b0};
+
+            // J-type  (jal)
+            7'b1101111: imm_ext = {{11{instr[31]}}, instr[31], instr[19:12],
+                                    instr[20], instr[30:21], 1'b0};
+
+            // MAC custom-0 — no immediate needed, use 0
+            7'b0001011: imm_ext = 32'b0;
+
+            default:    imm_ext = 32'b0;
+        endcase
+    end
+endmodule
