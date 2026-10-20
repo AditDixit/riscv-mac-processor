@@ -151,6 +151,14 @@ module riscv_pipeline (
         else                    ex_funct3 <= id_funct3;
     end
 
+    // AUIPC flag shadow latch (the A-operand mux below runs in EX, so it must
+    // use the EX-stage instruction, not the one currently in ID)
+    reg ex_auipc;
+    always @(posedge clk) begin
+        if (rst || flush_id_ex) ex_auipc <= 1'b0;
+        else                    ex_auipc <= (id_opcode == 7'b0010111);
+    end
+
     // Forwarding unit
     wire [1:0] fwd_a, fwd_b;
     forward_unit u_fwd (
@@ -175,7 +183,7 @@ module riscv_pipeline (
         ex_rd2;
 
     // ALU source A: AUIPC uses PC, everything else uses fwd_a_val
-    wire [31:0] alu_in_a = (id_opcode == 7'b0010111) ? ex_pc : fwd_a_val;
+    wire [31:0] alu_in_a = ex_auipc ? ex_pc : fwd_a_val;
 
     // ALU source B: immediate or forwarded rs2
     wire [31:0] alu_in_b = ex_alu_src ? ex_imm : fwd_b_val;

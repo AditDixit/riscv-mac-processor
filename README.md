@@ -1,10 +1,12 @@
 # RISC-V 32-bit Pipelined Processor with MAC Acceleration Unit
 
-5-stage pipelined RV32I processor in Verilog with a custom MAC instruction (`rd = rd + rs1 × rs2`) in the RISC-V custom-0 opcode space. Includes load-use hazard detection, branch/jump flushes, EX-EX and MEM-EX data forwarding, and a benchmark showing a **1.89× cycle-count speedup** over standard `mul` + `add` for an 8-element dot product.
+5-stage pipelined RV32I processor in Verilog with a custom MAC instruction (`rd = rd + rs1 × rs2`) in the RISC-V custom-0 opcode space. Includes load-use hazard detection, branch/jump flushes, EX-EX and MEM-EX data forwarding, and a benchmark suite (dot product, FIR, matrix multiply) comparing the MAC instruction against `mul` + `add`: **1.08× to 1.25× fewer cycles** on loop-based kernels, 1.89× on the straight-line 8-element dot product.
 
-## Benchmark Result
+## Benchmark Results
 
-Dot product of A = [1..8] and B = [8..1] (result 120), simulated cycle counts:
+### Straight-line dot product (`tb_benchmark.v`)
+
+Dot product of A = [1..8] and B = [8..1] (result 120), fully unrolled, operands already in registers:
 
 | | Standard (mul + add) | MAC accelerated |
 |---|---|---|
@@ -12,7 +14,26 @@ Dot product of A = [1..8] and B = [8..1] (result 120), simulated cycle counts:
 | Cycles | 17 | 9 |
 | **Speedup** | 1.00× | **1.89×** |
 
-Both versions are checked for the correct result (120) by `tb_benchmark.v`. The speedup is slightly under the ideal 2× because of the 1-cycle pipeline fill that both programs pay.
+This is the best case: only arithmetic, no loads, no loop control.
+
+### Kernels with loads and loops (`verif/bench.py`)
+
+Real kernels have to load operands and run a loop, and those instructions are the same for both versions, so the whole-program gain is smaller. Each program below is assembled from source, run on the RTL pipeline, and cross-checked against both a reference instruction-set simulator and an independent Python computation of the answer (all 10 match).
+
+| Benchmark | mul+add instrs | mul+add cycles | MAC instrs | MAC cycles | Speed-up |
+|---|---|---|---|---|---|
+| dot product, N=8 (loop) | 52 | 77 | 44 | 69 | 1.12× |
+| dot product, N=16 (loop) | 100 | 149 | 84 | 133 | 1.12× |
+| dot product, N=32 (loop) | 196 | 293 | 164 | 261 | 1.12× |
+| dot product, N=64 (loop) | 388 | 581 | 324 | 517 | 1.12× |
+| dot product, N=16 (unrolled ×4) | 76 | 85 | 60 | 69 | 1.23× |
+| dot product, N=64 (unrolled ×4) | 292 | 325 | 228 | 261 | 1.25× |
+| FIR, 32 outputs × 8 taps | 1986 | 2755 | 1730 | 2499 | 1.10× |
+| FIR, 32 outputs × 16 taps | 3778 | 5315 | 3266 | 4803 | 1.11× |
+| matrix multiply 4×4 | 639 | 832 | 575 | 768 | 1.08× |
+| matrix multiply 8×8 | 4571 | 6108 | 4059 | 5596 | 1.09× |
+
+Cycles are counted from reset release until the final `jal x0, 0` reaches the EX stage. The MAC saves exactly one instruction (and one cycle) per multiply-accumulate, so the speed-up is bounded by the fraction of the program that is the multiply-add itself; unrolling raises it, and the pipeline's load-use and branch penalties are paid equally by both versions.
 
 ## Architecture
 
@@ -47,6 +68,13 @@ IF → ID → EX → MEM → WB
 ├── tb_riscv_single.v     Testbench: single-cycle core
 ├── tb_riscv_pipeline.v   Testbench: pipelined core
 ├── tb_benchmark.v        Benchmark: MAC vs standard dot product
+├── verif/                Python-driven verification and benchmarks (see below)
+│   ├── rvtools.py            Assembler + reference instruction-set simulator
+│   ├── tb_prog_runner.v      Runs any hex program on the RTL and dumps state
+│   ├── simrun.py             Builds and drives the runner with Verilator
+│   ├── directed_tests.py     8 directed regression programs
+│   ├── random_diff.py        Differential random testing, RTL vs reference
+│   └── bench.py              MAC vs mul+add benchmark suite
 ├── RISC_V.qpf / .qsf     Quartus project (MAX 10, top = riscv_pipeline)
 └── LICENSE
 ```
@@ -123,15 +151,47 @@ Checks counted from the PASS lines each testbench prints (simulated with Verilat
 
 The pipeline testbench covers ALU ops with forwarding, load-use stall, branch taken and not taken, JAL (link value and skipped instruction), chained MACs, and a load feeding a MAC accumulator.
 
+### Differential random testing
+
+`verif/random_diff.py` generates random programs (ALU, immediate and shift ops, `mul`, `mac`, `lw`/`sw`, forward branches, `jal`, `jalr`, `lui`, `auipc`) over a small register set so that data hazards occur constantly, runs each on the RTL pipeline and on the Python reference simulator, and requires the final 32 registers and all 256 data words to match exactly.
+
+| Seeds | Programs | Dynamic instructions | Mismatches |
+|---|---|---|---|
+| 1 to 4 and 11 to 14 | 4,000 | 487,230 | **0** |
+
+`verif/directed_tests.py` adds 8 directed programs (AUIPC cases, LUI+ADDI, load to MAC accumulator, MAC chain, MUL forwarding), all passing. Run them with:
+
+```bash
+export VERILATOR_ROOT=<path to your Verilator install, if needed>
+python3 verif/directed_tests.py build_dir
+python3 verif/random_diff.py build_dir 500 1      # programs, seed
+python3 verif/bench.py build_dir
+```
+
+Random testing found a real bug that the hand-written tests missed: see the changelog entry on AUIPC.
+
+### Synthesis estimate (Yosys, generic)
+
+`synth -flatten; abc -lut 4` on `riscv_pipeline`, with the instruction and data memories treated as black boxes (256×32 bits each). This is a technology-independent estimate with Yosys 0.70, **not a Quartus result**.
+
+| Metric | Value |
+|---|---|
+| Flip-flops | 1,555 (1,024 are the 32×32 register file) |
+| 4-input LUTs | 6,148 |
+| Longest logic path | 57 LUT levels |
+
+The critical path runs from the forwarding mux through the ALU multiplier into the MAC adder. The 32×32 multiply is mapped to fabric logic here; on a device with hardwired multipliers (such as the MAX 10 embedded multipliers) it would map to those instead and the LUT count and depth would be lower. The register file is also mapped to flip-flops because it has three read ports; Fmax and resource usage on the target device remain to be measured in Quartus.
+
 ## Known Limitations
 
-- **No synthesis results yet.** The design parses cleanly in Yosys and the Quartus project now points at the correct top module (`riscv_pipeline`), but Fmax and logic-element usage on the MAX 10 have not been measured.
-- **Not run against the official RISC-V compliance tests.** Verification is by the hand-written testbenches above.
+- **No Quartus results yet.** The Quartus project points at the correct top module (`riscv_pipeline`), but Fmax and logic-element usage on the MAX 10 have not been measured; only the Yosys estimate above exists. The 57-level longest path suggests the single-cycle multiply-accumulate in EX limits clock speed.
+- **Not run against the official RISC-V compliance tests.** Verification is by the hand-written testbenches and the differential random tests above.
 - Data memory supports word access only (`lw` / `sw`); byte and halfword loads/stores are not implemented.
-- Instruction memory is initialised from `program.hex`; programs are hand-assembled rather than produced by a toolchain.
+- Instruction memory is initialised from `program.hex`; programs are assembled with the small Python assembler in `verif/rvtools.py` or by hand, not by a standard toolchain.
 
 ## Changelog
 
+- **AUIPC bug fixed.** The ALU's A-operand mux selected the PC based on the opcode of the instruction in the ID stage instead of the one in EX, so `auipc` computed `0 + imm` (and an unrelated instruction after it could get the PC). Found by differential random testing; fixed with an EX-stage flag; covered by `verif/directed_tests.py`.
 - Load-use hazard now also covers the MAC accumulator (`rd`). Previously a `lw` immediately followed by a `mac` on the same register accumulated onto the load address instead of the loaded data.
 - The MAC accumulator is read through a real register-file port instead of a hierarchical reference (`u_rf.rf[...]`), which worked in simulation but is not synthesizable.
 - Quartus project: corrected the top-level entity and removed testbenches from the design file list.
