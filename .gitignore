@@ -1,0 +1,31 @@
+# Simulation output
+*.wlf
+*.vcd
+*.fst
+vsim.wlf
+work/
+transcript
+modelsim.ini
+*.vvp
+a.out
+obj_dir/
+
+# Quartus
+db/
+incremental_db/
+output_files/
+simulation/
+*.rpt
+*.summary
+*.qws
+*.smsg
+*.done
+*.jdi
+*.pin
+*.sof
+*.pof
+
+# Editor / backup files
+*.bak
+*~
+.DS_Store
