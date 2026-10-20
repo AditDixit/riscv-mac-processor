@@ -180,11 +180,21 @@ Random testing found a real bug that the hand-written tests missed: see the chan
 | 4-input LUTs | 6,148 |
 | Longest logic path | 57 LUT levels |
 
-The critical path runs from the forwarding mux through the ALU multiplier into the MAC adder. The 32×32 multiply is mapped to fabric logic here; on a device with hardwired multipliers (such as the MAX 10 embedded multipliers) it would map to those instead and the LUT count and depth would be lower. The register file is also mapped to flip-flops because it has three read ports; Fmax and resource usage on the target device remain to be measured in Quartus.
+### Place-and-route Fmax (open-source flow, Lattice ECP5)
+
+To get a real timing number without Quartus, the core was synthesised with `yosys synth_ecp5` and placed and routed with `nextpnr-ecp5` (LFE5U-25F, CABGA381, default speed grade) at a 100 MHz target. The instruction memory was taken out as an input port so the datapath is not optimised away; the data memory is real.
+
+| Metric | Value |
+|---|---|
+| Fmax (best of 3 seeds) | **36.8 MHz** (35.4 to 36.8 MHz across seeds) |
+| 4-input LUTs / flip-flops | 1,946 / 573 |
+| Hardware multipliers / block RAM | 3 MULT18X18D / 1 DP16KD |
+
+The critical path starts at the data-memory read and runs through the forwarding mux, ALU and the multiply-accumulate. This is a different device family and tool from the MAX 10 / Quartus target, so treat it as an indication of the core's timing, not a MAX 10 result. Pipelining the multiply (or registering the data-memory read) would raise Fmax; that has not been done.
 
 ## Known Limitations
 
-- **No Quartus results yet.** The Quartus project points at the correct top module (`riscv_pipeline`), but Fmax and logic-element usage on the MAX 10 have not been measured; only the Yosys estimate above exists. The 57-level longest path suggests the single-cycle multiply-accumulate in EX limits clock speed.
+- **No Quartus results yet.** The Quartus project points at the correct top module (`riscv_pipeline`), but Fmax and logic-element usage on the MAX 10 have not been measured; only the Yosys estimate above exists. The ECP5 place-and-route result above shows the single-cycle multiply-accumulate path limits clock speed.
 - **Not run against the official RISC-V compliance tests.** Verification is by the hand-written testbenches and the differential random tests above.
 - Data memory supports word access only (`lw` / `sw`); byte and halfword loads/stores are not implemented.
 - Instruction memory is initialised from `program.hex`; programs are assembled with the small Python assembler in `verif/rvtools.py` or by hand, not by a standard toolchain.
