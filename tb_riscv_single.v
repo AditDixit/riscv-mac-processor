@@ -21,7 +21,7 @@
 //   nop                   # padding
 //
 // Run: iverilog -o tb_single tb_riscv_single.v riscv_single.v
-//               imem.v dmem.v regfile.v alu.v control.v
+//               Imem.v dmem.v RegFile.v ALU.v control.v
 //      vvp tb_single
 // ============================================================
 `timescale 1ns/1ps

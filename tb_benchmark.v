@@ -25,9 +25,9 @@
 // We use the PC to detect start and end.
 //
 // Run:
-//   iverilog -o tb_bench tb_benchmark.v riscv_pipeline.v \
-//            pipeline_regs.v hazard_unit.v forward_unit.v \
-//            imem.v dmem.v regfile.v alu.v control.v
+//   iverilog -o tb_bench tb_benchmark.v Riscv_pipeline.v \
+//            pipeline_reg.v Hazard_units.v Forward_units.v \
+//            Imem.v dmem.v RegFile.v ALU.v control.v
 //   vvp tb_bench
 // ============================================================
 `timescale 1ns/1ps

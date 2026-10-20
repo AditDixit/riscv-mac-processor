@@ -1,6 +1,6 @@
 // ============================================================
-// tb_alu.v  —  Exhaustive test for alu.v
-// Run: iverilog -o tb_alu tb_alu.v alu.v && vvp tb_alu
+// Tb_ALU.v  —  Exhaustive test for ALU.v
+// Run: iverilog -o tb_alu Tb_ALU.v ALU.v && vvp tb_alu
 // ============================================================
 `timescale 1ns/1ps
 
