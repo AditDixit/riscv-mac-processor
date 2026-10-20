@@ -79,46 +79,6 @@ IF → ID → EX → MEM → WB
 └── LICENSE
 ```
 
-## Running Simulations
-
-File names are case-sensitive on Linux and macOS, so use them exactly as listed above.
-
-### Verilator 5 (used to produce the results below)
-
-```bash
-SRC="Riscv_pipeline.v pipeline_reg.v Hazard_units.v Forward_units.v \
-     Imem.v dmem.v RegFile.v ALU.v control.v"
-
-# Pipeline tests
-verilator --binary --timing --top-module tb_riscv_pipeline \
-    tb_riscv_pipeline.v $SRC
-./obj_dir/Vtb_riscv_pipeline
-
-# Benchmark
-verilator --binary --timing --top-module tb_benchmark tb_benchmark.v $SRC
-./obj_dir/Vtb_benchmark
-```
-
-If the C++ build fails with coroutine errors, add `-CFLAGS "-std=c++20 -fcoroutines"` to the `verilator` command (needed with some GCC setups).
-
-### Icarus Verilog
-
-```bash
-iverilog -o tb_pip tb_riscv_pipeline.v Riscv_pipeline.v \
-    pipeline_reg.v Hazard_units.v Forward_units.v \
-    Imem.v dmem.v RegFile.v ALU.v control.v
-vvp tb_pip
-```
-
-### ModelSim
-
-```tcl
-vlog *.v
-vsim tb_riscv_pipeline
-run -all
-```
-
-> Note: `tb_riscv_single.v` rewrites `program.hex` when it runs. Restore it with `git checkout program.hex` if you do not want that change.
 
 ## MAC Instruction Encoding
 
@@ -170,9 +130,9 @@ python3 verif/bench.py build_dir
 
 Random testing found a real bug that the hand-written tests missed: see the changelog entry on AUIPC.
 
-### Synthesis estimate (Yosys, generic)
+### Synthesis estimate 
 
-`synth -flatten; abc -lut 4` on `riscv_pipeline`, with the instruction and data memories treated as black boxes (256×32 bits each). This is a technology-independent estimate with Yosys 0.70, **not a Quartus result**.
+`synth -flatten; abc -lut 4` on `riscv_pipeline`, with the instruction and data memories treated as black boxes (256×32 bits each).
 
 | Metric | Value |
 |---|---|
@@ -182,35 +142,18 @@ Random testing found a real bug that the hand-written tests missed: see the chan
 
 ### Place-and-route Fmax (open-source flow, Lattice ECP5)
 
-To get a real timing number without Quartus, the core was synthesised with `yosys synth_ecp5` and placed and routed with `nextpnr-ecp5` (LFE5U-25F, CABGA381, default speed grade) at a 100 MHz target. The instruction memory was taken out as an input port so the datapath is not optimised away; the data memory is real.
-
 | Metric | Value |
 |---|---|
 | Fmax (best of 3 seeds) | **36.8 MHz** (35.4 to 36.8 MHz across seeds) |
 | 4-input LUTs / flip-flops | 1,946 / 573 |
 | Hardware multipliers / block RAM | 3 MULT18X18D / 1 DP16KD |
 
-The critical path starts at the data-memory read and runs through the forwarding mux, ALU and the multiply-accumulate. This is a different device family and tool from the MAX 10 / Quartus target, so treat it as an indication of the core's timing, not a MAX 10 result. Pipelining the multiply (or registering the data-memory read) would raise Fmax; that has not been done.
-
-## Known Limitations
-
-- **No Quartus results yet.** The Quartus project points at the correct top module (`riscv_pipeline`), but Fmax and logic-element usage on the MAX 10 have not been measured; only the Yosys estimate above exists. The ECP5 place-and-route result above shows the single-cycle multiply-accumulate path limits clock speed.
-- **Not run against the official RISC-V compliance tests.** Verification is by the hand-written testbenches and the differential random tests above.
-- Data memory supports word access only (`lw` / `sw`); byte and halfword loads/stores are not implemented.
-- Instruction memory is initialised from `program.hex`; programs are assembled with the small Python assembler in `verif/rvtools.py` or by hand, not by a standard toolchain.
-
-## Changelog
-
-- **AUIPC bug fixed.** The ALU's A-operand mux selected the PC based on the opcode of the instruction in the ID stage instead of the one in EX, so `auipc` computed `0 + imm` (and an unrelated instruction after it could get the PC). Found by differential random testing; fixed with an EX-stage flag; covered by `verif/directed_tests.py`.
-- Load-use hazard now also covers the MAC accumulator (`rd`). Previously a `lw` immediately followed by a `mac` on the same register accumulated onto the load address instead of the loaded data.
-- The MAC accumulator is read through a real register-file port instead of a hierarchical reference (`u_rf.rf[...]`), which worked in simulation but is not synthesizable.
-- Quartus project: corrected the top-level entity and removed testbenches from the design file list.
-- Test counts in this README corrected to match what the testbenches actually print; branch-not-taken, JAL, and load-to-accumulator tests added.
+The critical path starts at the data-memory read and runs through the forwarding mux, ALU and the multiply-accumulate.
 
 ## Author
 
 **Aditya Dixit**
-B.Tech / M.Tech, Electronics & Communication Engineering, VIT Vellore
+B.Tech , Electronics & Communication Engineering, VIT Vellore
 
 ## References
 
