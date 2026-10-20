@@ -1,7 +1,7 @@
 // ============================================================
 // tb_hazard_forward.v
-// Run: iverilog -o tb_hf tb_hazard_forward.v
-//               hazard_unit.v forward_unit.v && vvp tb_hf
+// Run: iverilog -o tb_hf tb_hazard_forward.v \
+//               Hazard_units.v Forward_units.v && vvp tb_hf
 // ============================================================
 `timescale 1ns/1ps
 
@@ -12,6 +12,8 @@ module tb_hazard_forward;
     // ── hazard_unit ports ─────────────────────────────────
     reg        id_ex_mem_read;
     reg [4:0]  id_ex_rd_h, if_id_rs1_h, if_id_rs2_h;
+    reg [4:0]  if_id_rd_h;          // rd field of the instruction in ID
+    reg        if_id_mac_h;         // instruction in ID is a MAC
     reg        branch_taken, jump_sig;
     wire       stall, flush_if_id, flush_id_ex;
 
@@ -20,6 +22,8 @@ module tb_hazard_forward;
         .id_ex_rd(id_ex_rd_h),
         .if_id_rs1(if_id_rs1_h),
         .if_id_rs2(if_id_rs2_h),
+        .if_id_rd(if_id_rd_h),
+        .if_id_mac(if_id_mac_h),
         .branch_taken(branch_taken),
         .jump(jump_sig),
         .stall(stall),
@@ -67,6 +71,8 @@ module tb_hazard_forward;
     endtask
 
     initial begin
+        if_id_rd_h = 5'd0;
+        if_id_mac_h = 1'b0;
 
         // ══════════════════════════════════════════════════
         // HAZARD UNIT TESTS
@@ -101,6 +107,24 @@ module tb_hazard_forward;
         id_ex_mem_read=1; id_ex_rd_h=5'd4;
         if_id_rs1_h=5'd1; if_id_rs2_h=5'd2; #1;
         chk1(stall, 0, "load diff rd: no stall");
+
+        // MAC reads its rd as the accumulator, so a load into that rd
+        // must stall the MAC even though rs1/rs2 do not match.
+        $display("--- Hazard Unit: load -> MAC accumulator (rd) ---");
+        id_ex_mem_read=1; id_ex_rd_h=5'd14;
+        if_id_rs1_h=5'd1; if_id_rs2_h=5'd2;
+        if_id_rd_h=5'd14; if_id_mac_h=1; #1;
+        chk1(stall,       1, "load->MAC acc: stall=1");
+        chk1(flush_id_ex, 1, "load->MAC acc: flush_id_ex=1");
+
+        $display("--- Hazard Unit: MAC with different rd ---");
+        if_id_rd_h=5'd15; if_id_mac_h=1; #1;
+        chk1(stall, 0, "MAC diff rd: no stall");
+
+        $display("--- Hazard Unit: non-MAC, rd field matches ---");
+        if_id_rd_h=5'd14; if_id_mac_h=0; #1;
+        chk1(stall, 0, "non-MAC rd match: no stall");
+        if_id_rd_h=5'd0; if_id_mac_h=0;
 
         $display("--- Hazard Unit: branch taken ---");
         id_ex_mem_read=0; branch_taken=1; jump_sig=0;

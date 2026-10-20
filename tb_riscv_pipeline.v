@@ -33,10 +33,26 @@
 //   mac  x14, x1, x2     // x14 = 20 + 4*5 = 40
 //   mac  x14, x1, x2     // x14 = 40 + 4*5 = 60
 //
+// TEST 5 — MAC accumulator fed by a load (hazard on rd, not rs1/rs2)
+//   lw   x24, 16(x0)      // x24 = 100
+//   mac  x24, x1, x2      // x24 = 100 + 4*5 = 120 (needs 1-cycle stall)
+//   lw   x25, 16(x0)      // x25 = 100
+//   nop
+//   mac  x25, x1, x2      // x25 = 120 (forwarded from WB)
+//
+// TEST 6 — Branch NOT taken (fall-through must execute)
+//   beq  x26, x27, +8     // x26 != x27, not taken
+//   addi x28, x0, 55      // must run
+//
+// TEST 7 — JAL (link register + skipped instruction)
+//   jal  x29, +8          // x29 = pc + 4
+//   addi x30, x0, 99      // SKIPPED
+//   addi x31, x0, 7       // jump target
+//
 // Run:
-//   iverilog -o tb_pip tb_riscv_pipeline.v riscv_pipeline.v \
-//            pipeline_regs.v hazard_unit.v forward_unit.v \
-//            imem.v dmem.v regfile.v alu.v control.v
+//   iverilog -o tb_pip tb_riscv_pipeline.v Riscv_pipeline.v \
+//            pipeline_reg.v Hazard_units.v Forward_units.v \
+//            Imem.v dmem.v RegFile.v ALU.v control.v
 //   vvp tb_pip
 // ============================================================
 `timescale 1ns/1ps
@@ -110,6 +126,17 @@ module tb_riscv_pipeline;
         stype = {imm[11:5], rs2, rs1, funct3, imm[4:0], opcode};
     endfunction
 
+    // Encode J-type (JAL): imm_bytes is the raw signed byte offset
+    function [31:0] jtype;
+        input [31:0] imm_bytes;
+        input [4:0]  rd;
+        reg [20:0] imm;
+        begin
+            imm = imm_bytes[20:0];
+            jtype = {imm[20], imm[10:1], imm[11], imm[19:12], rd, 7'b1101111};
+        end
+    endfunction
+
     localparam OP_ARITH = 7'b0110011;
     localparam OP_IARITH= 7'b0010011;
     localparam OP_LOAD  = 7'b0000011;
@@ -124,6 +151,7 @@ module tb_riscv_pipeline;
             uut.u_imem.mem[i] = NOP;
             uut.u_dmem.mem[i] = 32'b0;
         end
+        uut.u_dmem.mem[4] = 32'd100;   // data for TEST 5 (byte address 16)
 
         // ── TEST 1: ALU + EX-EX forwarding ─────────────────
         // addr 0
@@ -155,15 +183,35 @@ module tb_riscv_pipeline;
         uut.u_imem.mem[18] = rtype(7'h00, 5'd2, 5'd1, 3'b000, 5'd14, OP_MAC); // mac x14,x1,x2
         uut.u_imem.mem[19] = rtype(7'h00, 5'd2, 5'd1, 3'b000, 5'd14, OP_MAC); // mac x14,x1,x2
         uut.u_imem.mem[20] = rtype(7'h00, 5'd2, 5'd1, 3'b000, 5'd14, OP_MAC); // mac x14,x1,x2
+
+        // ── TEST 5: MAC accumulator fed by a load ───────────
+        // (x1 = 4, x2 = 5 from TEST 4, so each MAC adds 20)
+        uut.u_imem.mem[22] = itype(12'd16, 5'd0, 3'b010, 5'd24, OP_LOAD);   // lw  x24,16(x0)
+        uut.u_imem.mem[23] = rtype(7'h00, 5'd2, 5'd1, 3'b000, 5'd24, OP_MAC); // mac x24,x1,x2 (adjacent)
+        uut.u_imem.mem[28] = itype(12'd16, 5'd0, 3'b010, 5'd25, OP_LOAD);   // lw  x25,16(x0)
+        // mem[29] stays NOP
+        uut.u_imem.mem[30] = rtype(7'h00, 5'd2, 5'd1, 3'b000, 5'd25, OP_MAC); // mac x25,x1,x2 (1 gap)
+
+        // ── TEST 6: Branch NOT taken ────────────────────────
+        uut.u_imem.mem[34] = itype(12'd1, 5'd0, 3'b000, 5'd26, OP_IARITH);  // addi x26,x0,1
+        uut.u_imem.mem[35] = itype(12'd2, 5'd0, 3'b000, 5'd27, OP_IARITH);  // addi x27,x0,2
+        uut.u_imem.mem[36] = btype(32'd8, 5'd27, 5'd26, 3'b000, OP_BRANCH); // beq x26,x27,+8 (not taken)
+        uut.u_imem.mem[37] = itype(12'd55, 5'd0, 3'b000, 5'd28, OP_IARITH); // addi x28,x0,55
+
+        // ── TEST 7: JAL ─────────────────────────────────────
+        // mem[40] is byte address 160, so the link value is 164
+        uut.u_imem.mem[40] = jtype(32'd8, 5'd29);                           // jal x29,+8
+        uut.u_imem.mem[41] = itype(12'd99, 5'd0, 3'b000, 5'd30, OP_IARITH); // addi x30,x0,99 SKIPPED
+        uut.u_imem.mem[42] = itype(12'd7,  5'd0, 3'b000, 5'd31, OP_IARITH); // addi x31,x0,7
         // NOPs fill rest
 
         // ── Reset release ───────────────────────────────────
         @(posedge clk); #1;
         rst = 0;
 
-        // Run enough cycles (program has ~21 instrs + pipeline depth + stalls)
-        // 21 instrs + 4 pipeline stages + 2-cycle branch penalty + 1 load stall = ~35
-        repeat(45) @(posedge clk);
+        // Run enough cycles: 43 instrs + 4 pipeline stages + branch/jump
+        // penalties + 2 load stalls is well under 70; 90 leaves margin.
+        repeat(90) @(posedge clk);
         #1;
 
         // ── Check results ───────────────────────────────────
@@ -189,6 +237,18 @@ module tb_riscv_pipeline;
 
         $display("\n=== TEST 4: MAC Accumulation ===");
         chk(`RF[14], 32'd60, "x14 = 60 (3x MAC: 20+20+20)");
+
+        $display("\n=== TEST 5: MAC accumulator fed by a load ===");
+        chk(`RF[24], 32'd120, "x24 = 120 (lw -> mac, adjacent)");
+        chk(`RF[25], 32'd120, "x25 = 120 (lw, gap, mac)");
+
+        $display("\n=== TEST 6: Branch Not Taken ===");
+        chk(`RF[28], 32'd55,  "x28 = 55  (beq not taken)");
+
+        $display("\n=== TEST 7: JAL ===");
+        chk(`RF[29], 32'd164, "x29 = 164 (jal link = pc+4)");
+        chk(`RF[30], 32'd0,   "x30 = 0   (jal skipped instr)");
+        chk(`RF[31], 32'd7,   "x31 = 7   (jal target ran)");
 
         if (errors == 0)
             $display("\n=== ALL PIPELINE TESTS PASSED ===");

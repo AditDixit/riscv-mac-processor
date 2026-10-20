@@ -11,6 +11,11 @@
 //    Condition:
 //      id_ex_mem_read &&
 //      (id_ex_rd == if_id_rs1 || id_ex_rd == if_id_rs2)
+//    A MAC instruction also READS its destination register (rd) as
+//    the accumulator, so for a MAC in ID the stall condition also
+//    includes (id_ex_rd == if_id_rd). Without this, a load directly
+//    followed by a MAC on the same register would accumulate onto
+//    the load address instead of the loaded data.
 //
 // 2. CONTROL HAZARD (branch / jump taken)
 //    When a branch is resolved in EX or a jump is decoded in ID,
@@ -30,6 +35,8 @@ module hazard_unit (
     input  wire [4:0]  id_ex_rd,         // destination of LW in EX
     input  wire [4:0]  if_id_rs1,        // rs1 of instruction in ID
     input  wire [4:0]  if_id_rs2,        // rs2 of instruction in ID
+    input  wire [4:0]  if_id_rd,         // rd of instruction in ID (MAC accumulator)
+    input  wire        if_id_mac,        // instruction in ID is a MAC
 
     // Control hazard inputs
     input  wire        branch_taken,     // branch resolved as taken (from EX)
@@ -50,7 +57,8 @@ module hazard_unit (
         // ── Load-use stall ────────────────────────────────
         if (id_ex_mem_read &&
             ((id_ex_rd == if_id_rs1 && if_id_rs1 != 5'b0) ||
-             (id_ex_rd == if_id_rs2 && if_id_rs2 != 5'b0))) begin
+             (id_ex_rd == if_id_rs2 && if_id_rs2 != 5'b0) ||
+             (if_id_mac && id_ex_rd == if_id_rd && if_id_rd != 5'b0))) begin
             stall       = 1'b1;   // freeze PC and IF/ID
             flush_id_ex = 1'b1;   // insert bubble into EX
         end

@@ -1,6 +1,6 @@
 // ============================================================
-// tb_memory_regfile.v  —  Smoke-test for imem, dmem, regfile
-// Run: iverilog -o tb_mem tb_memory_regfile.v imem.v dmem.v regfile.v
+// Tb_memory_regfile.v  —  Smoke-test for imem, dmem, regfile
+// Run: iverilog -o tb_mem Tb_memory_regfile.v Imem.v dmem.v RegFile.v
 //      vvp tb_mem
 // ============================================================
 `timescale 1ns/1ps
@@ -26,12 +26,12 @@ module tb_memory_regfile;
 
     // ---- regfile ----------------------------------------------
     reg         rf_we;
-    reg  [4:0]  rf_ra1, rf_ra2, rf_wa3;
+    reg  [4:0]  rf_ra1, rf_ra2, rf_ra_acc, rf_wa3;
     reg  [31:0] rf_wd3;
-    wire [31:0] rf_rd1, rf_rd2;
+    wire [31:0] rf_rd1, rf_rd2, rf_rd_acc;
     regfile u_rf (.clk(clk), .we3(rf_we),
-                  .ra1(rf_ra1), .ra2(rf_ra2), .wa3(rf_wa3),
-                  .wd3(rf_wd3), .rd1(rf_rd1), .rd2(rf_rd2));
+                  .ra1(rf_ra1), .ra2(rf_ra2), .ra_acc(rf_ra_acc), .wa3(rf_wa3),
+                  .wd3(rf_wd3), .rd1(rf_rd1), .rd2(rf_rd2), .rd_acc(rf_rd_acc));
 
     // ---- test body --------------------------------------------
     integer errors = 0;
@@ -65,7 +65,7 @@ module tb_memory_regfile;
         check(dmem_rd, 32'hCAFEBABE, "dmem second write/read");
 
         // -- regfile: basic write/read --------------------------
-        rf_we = 0; rf_ra1 = 0; rf_ra2 = 0; rf_wa3 = 0; rf_wd3 = 0;
+        rf_we = 0; rf_ra1 = 0; rf_ra2 = 0; rf_ra_acc = 0; rf_wa3 = 0; rf_wd3 = 0;
 
         // Write 0x12345678 to x5
         @(posedge clk); #1;
@@ -100,6 +100,20 @@ module tb_memory_regfile;
         rf_ra1 = 5'd7;
         #1;
         check(rf_rd1, 32'hBEEFCAFE, "regfile write-through bypass");
+        @(posedge clk); #1;
+        rf_we = 0;
+
+        // Accumulator read port (used by MAC): plain read, x0, write-through
+        rf_ra_acc = 5'd5;
+        #1;
+        check(rf_rd_acc, 32'h12345678, "regfile acc port read x5");
+        rf_ra_acc = 5'd0;
+        #1;
+        check(rf_rd_acc, 32'h0, "regfile acc port x0 = zero");
+        rf_we = 1; rf_wa3 = 5'd9; rf_wd3 = 32'h0BADF00D;
+        rf_ra_acc = 5'd9;
+        #1;
+        check(rf_rd_acc, 32'h0BADF00D, "regfile acc port write-through");
         @(posedge clk); #1;
         rf_we = 0;
 
