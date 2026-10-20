@@ -95,11 +95,13 @@ module riscv_pipeline (
     imm_gen u_imm (.instr(if_id_instr), .imm_ext(id_imm_ext));
 
     wire [31:0] id_rd1, id_rd2;
+    wire [4:0]  ex_rd;          // declared here: used by the accumulator read port below
+    wire [31:0] rf_acc;         // MAC accumulator read (EX stage reads its own rd)
     regfile u_rf (
         .clk(clk),    .we3(wb_reg_write),
-        .ra1(id_rs1), .ra2(id_rs2),
+        .ra1(id_rs1), .ra2(id_rs2), .ra_acc(ex_rd),
         .wa3(wb_rd),  .wd3(wb_result),
-        .rd1(id_rd1), .rd2(id_rd2)
+        .rd1(id_rd1), .rd2(id_rd2), .rd_acc(rf_acc)
     );
 
 // ================================================================
@@ -110,7 +112,7 @@ module riscv_pipeline (
     wire        ex_lui_op, ex_mac_op;
     wire [3:0]  ex_alu_ctrl;
     wire [31:0] ex_pc, ex_pc4, ex_rd1, ex_rd2, ex_imm;
-    wire [4:0]  ex_rs1, ex_rs2, ex_rd;
+    wire [4:0]  ex_rs1, ex_rs2;
 
     id_ex_reg u_id_ex (
         .clk(clk), .rst(rst), .flush(flush_id_ex),
@@ -194,7 +196,7 @@ module riscv_pipeline (
     wire [31:0] mac_acc =
         (mem_reg_write && mem_rd == ex_rd && ex_rd != 5'b0) ? mem_mac_result :
         (wb_reg_write  && wb_rd  == ex_rd && ex_rd != 5'b0) ? wb_result      :
-        u_rf.rf[ex_rd];
+        rf_acc;
 
     wire [31:0] ex_mac_result = mac_acc + ex_alu_result;
 
@@ -307,6 +309,8 @@ module riscv_pipeline (
         .id_ex_rd(ex_rd),
         .if_id_rs1(id_rs1),
         .if_id_rs2(id_rs2),
+        .if_id_rd(id_rd),
+        .if_id_mac(id_mac_op),
         .branch_taken(branch_taken_ex),
         .jump(ex_jump),
         .stall(stall_pc),
