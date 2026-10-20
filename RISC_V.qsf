@@ -39,7 +39,7 @@
 
 set_global_assignment -name FAMILY "MAX 10"
 set_global_assignment -name DEVICE 10M08DAF484C8G
-set_global_assignment -name TOP_LEVEL_ENTITY RISC_V
+set_global_assignment -name TOP_LEVEL_ENTITY riscv_pipeline
 set_global_assignment -name ORIGINAL_QUARTUS_VERSION 23.1STD.1
 set_global_assignment -name PROJECT_CREATION_TIME_DATE "13:41:16  MAY 25, 2026"
 set_global_assignment -name LAST_QUARTUS_VERSION "23.1std.1 Lite Edition"
@@ -54,17 +54,12 @@ set_global_assignment -name EDA_GENERATE_FUNCTIONAL_NETLIST OFF -section_id eda_
 set_global_assignment -name EDA_GENERATE_FUNCTIONAL_NETLIST OFF -section_id eda_board_design_symbol
 set_global_assignment -name EDA_GENERATE_FUNCTIONAL_NETLIST OFF -section_id eda_board_design_signal_integrity
 set_global_assignment -name EDA_GENERATE_FUNCTIONAL_NETLIST OFF -section_id eda_board_design_boundary_scan
+set_global_assignment -name VERILOG_FILE Riscv_pipeline.v
 set_global_assignment -name VERILOG_FILE Imem.v
 set_global_assignment -name VERILOG_FILE dmem.v
 set_global_assignment -name VERILOG_FILE RegFile.v
-set_global_assignment -name VERILOG_FILE Tb_memory_regfile.v
 set_global_assignment -name VERILOG_FILE ALU.v
-set_global_assignment -name VERILOG_FILE Tb_ALU.v
 set_global_assignment -name VERILOG_FILE control.v
-set_global_assignment -name VERILOG_FILE tb_control.v
-set_global_assignment -name VERILOG_FILE riscv_single.v
-set_global_assignment -name VERILOG_FILE tb_riscv_single.v
 set_global_assignment -name VERILOG_FILE pipeline_reg.v
 set_global_assignment -name VERILOG_FILE Hazard_units.v
 set_global_assignment -name VERILOG_FILE Forward_units.v
-set_global_assignment -name VERILOG_FILE tb_hazard_forward.v

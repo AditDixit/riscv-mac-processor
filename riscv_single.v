@@ -73,22 +73,19 @@ module riscv_single (
     wire [31:0] rf_rd1, rf_rd2, rf_rd_acc;
     wire [31:0] result_wb;         // write-back data (defined below)
 
-    regfile u_rf (
+    // Third read port (ra_acc/rd_acc) gives the MAC its accumulator, i.e.
+    // the current value of the destination register rd. Write-through is
+    // disabled here: in single-cycle the MAC's own result is the write data
+    // for rd, so forwarding it back would be a combinational loop. The
+    // previous instruction's write has already settled in the array.
+    regfile #(.ACC_WRITE_THROUGH(0)) u_rf (
         .clk(clk), .we3(reg_write),
-        .ra1(rs1), .ra2(rs2), .wa3(rd),
-        .wd3(result_wb), .rd1(rf_rd1), .rd2(rf_rd2)
+        .ra1(rs1), .ra2(rs2), .ra_acc(rd), .wa3(rd),
+        .wd3(result_wb), .rd1(rf_rd1), .rd2(rf_rd2), .rd_acc(rf_rd_acc)
     );
 
-    // Third read port for MAC accumulator (reads destination register rd)
-    // Direct combinational read from the register file array.
-    // Write-through: if WB is writing to rd this same cycle, forward
-    // the new value so back-to-back MAC instructions accumulate correctly.
-    // Read current accumulator value directly from register file.
-    // In single-cycle, the previous instruction's write has already
-    // settled before this instruction's combinational path runs.
-    // x0 is always zero per the ISA.
     wire [31:0] acc_val;
-    assign acc_val = (rd == 5'b0) ? 32'b0 : u_rf.rf[rd];
+    assign acc_val = rf_rd_acc;
 
     // ── ALU ───────────────────────────────────────────────────
     wire [31:0] alu_src_a;
