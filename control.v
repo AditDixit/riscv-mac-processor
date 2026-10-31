@@ -7,8 +7,11 @@
 //
 // Supported instructions:
 //   R-type : add sub and or xor sll srl sra slt sltu mul
-//   I-type : addi andi ori xori slli srli srai slti sltiu lw jalr
-//   S-type : sw
+//   I-type : addi andi ori xori slli srli srai slti sltiu
+//            lb lh lw lbu lhu jalr
+//   S-type : sb sh sw   (width handled by lsu_align.v in MEM)
+//   FENCE  : opcode 0001111 decodes to all-zero controls = no-op,
+//            which is correct for a single in-order hart
 //   B-type : beq bne blt bge bltu bgeu
 //   U-type : lui auipc
 //   J-type : jal
@@ -68,7 +71,7 @@ module main_decoder (
                 alu_op    = 2'b10;
             end
 
-            // Load  (lw — and future lb lh lbu lhu)
+            // Load  (lb lh lw lbu lhu — width from funct3, see lsu_align.v)
             7'b0000011: begin
                 reg_write  = 1'b1;
                 alu_src    = 1'b1;
@@ -77,7 +80,7 @@ module main_decoder (
                 alu_op     = 2'b00;  // ADD for address
             end
 
-            // Store  (sw)
+            // Store  (sb sh sw)
             7'b0100011: begin
                 alu_src   = 1'b1;
                 mem_write = 1'b1;

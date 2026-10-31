@@ -5,7 +5,7 @@ import rvtools
 HERE = os.path.dirname(os.path.abspath(__file__))
 RTL = os.path.dirname(HERE)
 SRCS = ["ALU.v", "Forward_units.v", "Hazard_units.v", "Imem.v", "RegFile.v",
-        "Riscv_pipeline.v", "control.v", "dmem.v", "pipeline_reg.v"]
+        "Riscv_pipeline.v", "control.v", "dmem.v", "lsu_align.v", "pipeline_reg.v"]
 
 
 def build(workdir):
@@ -22,6 +22,15 @@ def build(workdir):
 
 def run_rtl(exe, words, data=None, tmp=None):
     """Run a program on the RTL. Returns (regs[32], dmem[256], cycles)."""
+    regs, mem, cyc, _ = run_rtl_stats(exe, words, data, tmp)
+    return regs, mem, cyc
+
+
+def run_rtl_stats(exe, words, data=None, tmp=None):
+    """Like run_rtl, plus a dict of pipeline performance counters:
+    stall (load-use stall cycles), ctrl (taken branches + jumps, 2-cycle
+    flush each), fwd_ex / fwd_mem (operands bypassed from EX/MEM and MEM/WB),
+    mac_bypass (MAC accumulators taken from the bypass path)."""
     tmp = tmp or tempfile.mkdtemp()
     p, d, o = (os.path.join(tmp, n) for n in ("prog.hex", "data.hex", "out.txt"))
     rvtools.write_hex(p, words)
@@ -29,6 +38,9 @@ def run_rtl(exe, words, data=None, tmp=None):
     halt = 4 * words.index(rvtools.HALT)
     r = subprocess.run([exe, f"+PROG={p}", f"+DATA={d}", f"+HALT={halt}", f"+OUT={o}"],
                        capture_output=True, text=True, check=True)
-    cyc = int([l for l in r.stdout.splitlines() if l.startswith("CYCLES")][0].split()[1])
+    lines = r.stdout.splitlines()
+    cyc = int([l for l in lines if l.startswith("CYCLES")][0].split()[1])
+    st = [l for l in lines if l.startswith("STATS")]
+    stats = {k: int(v) for k, v in (kv.split("=") for kv in st[0].split()[1:])} if st else {}
     vals = [int(l, 16) for l in open(o).read().split()]
-    return vals[:32], vals[32:], cyc
+    return vals[:32], vals[32:], cyc, stats

@@ -2,7 +2,8 @@
 """Differential random testing: RTL pipeline vs the Python reference simulator.
 
 Usage: random_diff.py <build-dir> [num_programs] [seed]
-Each program initialises registers, runs a random mix of ALU, MAC, load/store,
+Each program initialises registers, runs a random mix of ALU, MAC,
+byte/halfword/word loads and stores, fences,
 forward branches and jumps (small register set to force hazards), then halts.
 Final registers and data memory of the RTL must equal the reference exactly.
 """
@@ -14,6 +15,15 @@ RO = ["add", "sub", "and", "or", "xor", "sll", "srl", "sra", "slt", "sltu", "mul
 IO = ["addi", "andi", "ori", "xori", "slti", "sltiu"]
 SO = ["slli", "srli", "srai"]
 BO = ["beq", "bne", "blt", "bge", "bltu", "bgeu"]
+
+
+def mem_operand(rng, op):
+    """Naturally aligned address operand for a load/store of op's width.
+    x9 holds a word-aligned base; x0-relative offsets cover the whole 1 KB."""
+    align = {"b": 1, "h": 2, "w": 4}[op[1]]
+    if rng.random() < .5:
+        return f"{rng.randrange(0, 512 // align) * align}(x9)"
+    return f"{rng.randrange(0, 1024 // align) * align}(x0)"
 
 
 def gen(rng, n_body):
@@ -33,9 +43,11 @@ def gen(rng, n_body):
         elif c < 0.62:
             L.append(f"mac {r()}, {r()}, {r()}")
         elif c < 0.74:
-            L.append(f"lw {r()}, {rng.randrange(0, 128) * 4}(x9)" if rng.random() < .5 else f"lw {r()}, {rng.randrange(0, 255) * 4 % 2048}(x0)")
+            op = rng.choice(["lw", "lw", "lw", "lb", "lbu", "lh", "lhu"])
+            L.append(f"{op} {r()}, {mem_operand(rng, op)}")
         elif c < 0.84:
-            L.append(f"sw {r()}, {rng.randrange(0, 128) * 4}(x9)" if rng.random() < .5 else f"sw {r()}, {rng.randrange(0, 255) * 4 % 2048}(x0)")
+            op = rng.choice(["sw", "sw", "sb", "sh"])
+            L.append(f"{op} {r()}, {mem_operand(rng, op)}")
         elif c < 0.93:
             skip = rng.randint(1, 3)
             L.append(f"{rng.choice(BO)} {r()}, {r()}, skip{k}")
@@ -46,10 +58,12 @@ def gen(rng, n_body):
             L.append(f"jal x{rng.choice([0, 10, 11])}, jt{k}")
             L.append(f"addi {r()}, {r()}, 1")
             L.append(f"jt{k}:")
-        elif c < 0.985:
+        elif c < 0.98:
             L.append("auipc x12, 0")
             L.append(f"jalr x13, 12(x12)")
             L.append(f"addi {r()}, {r()}, 7")
+        elif c < 0.985:
+            L.append("fence")
         else:
             L.append(f"lui {r()}, {rng.getrandbits(20)}")
     L.append("halt: jal x0, 0")

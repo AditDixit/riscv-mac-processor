@@ -29,3 +29,10 @@ simulation/
 *.bak
 *~
 .DS_Store
+
+# Python / build output
+__pycache__/
+*.pyc
+build_dir/
+cov_dir/
+synth/build/

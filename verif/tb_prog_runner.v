@@ -18,6 +18,15 @@ module tb_prog_runner;
 
     reg [1023:0] prog_f, data_f, out_f;
     integer halt_pc, cycles, i, fd, have_data, have_halt;
+    integer n_stall, n_ctrl, n_fwd_ex, n_fwd_mem, n_mac_byp;
+
+    // Does the instruction now in EX really read rs1 / rs2? (The forwarding
+    // unit compares register numbers regardless of format; these filter out
+    // fields that are really immediates, so forwarding counts are exact.)
+    reg [6:0] ex_opc;
+    always @(posedge clk) if (uut.flush_id_ex || rst) ex_opc <= 7'h13; else ex_opc <= uut.id_opcode;
+    wire uses_rs1 = !(ex_opc == 7'h37 || ex_opc == 7'h17 || ex_opc == 7'h6F || ex_opc == 7'h0F) && uut.ex_rs1 != 0;
+    wire uses_rs2 = (ex_opc == 7'h33 || ex_opc == 7'h23 || ex_opc == 7'h63 || ex_opc == 7'h0B) && uut.ex_rs2 != 0;
 
     initial begin
         if (!$value$plusargs("PROG=%s", prog_f)) begin $display("ERROR: +PROG missing"); $finish; end
@@ -29,8 +38,18 @@ module tb_prog_runner;
         if (!$value$plusargs("OUT=%s", out_f)) begin $display("ERROR: +OUT missing"); $finish; end
         repeat (3) @(posedge clk);
         #1 rst = 0;
-        cycles = 0;
+        cycles = 0; n_stall = 0; n_ctrl = 0; n_fwd_ex = 0; n_fwd_mem = 0; n_mac_byp = 0;
         while (!(uut.ex_jump && uut.ex_pc === halt_pc) && cycles < 3000000) begin
+            // Sample the instruction in EX during this cycle (performance counters)
+            if (uut.stall_pc)                         n_stall   = n_stall + 1;
+            if (uut.branch_taken_ex || uut.ex_jump)   n_ctrl    = n_ctrl + 1;
+            if (uses_rs1 && uut.fwd_a == 2'b10)       n_fwd_ex  = n_fwd_ex + 1;
+            if (uses_rs2 && uut.fwd_b == 2'b10)       n_fwd_ex  = n_fwd_ex + 1;
+            if (uses_rs1 && uut.fwd_a == 2'b01)       n_fwd_mem = n_fwd_mem + 1;
+            if (uses_rs2 && uut.fwd_b == 2'b01)       n_fwd_mem = n_fwd_mem + 1;
+            if (uut.ex_mac_op && uut.ex_rd != 0 &&
+                ((uut.mem_reg_write && uut.mem_rd == uut.ex_rd) ||
+                 (uut.wb_reg_write  && uut.wb_rd  == uut.ex_rd))) n_mac_byp = n_mac_byp + 1;
             @(posedge clk); cycles = cycles + 1;
         end
         repeat (8) @(posedge clk);
@@ -39,6 +58,8 @@ module tb_prog_runner;
         for (i = 0; i < 256; i = i + 1) $fdisplay(fd, "%08x", uut.u_dmem.mem[i]);
         $fclose(fd);
         $display("CYCLES %0d", cycles);
+        $display("STATS stall=%0d ctrl=%0d fwd_ex=%0d fwd_mem=%0d mac_bypass=%0d",
+                 n_stall, n_ctrl, n_fwd_ex, n_fwd_mem, n_mac_byp);
         $finish;
     end
 endmodule

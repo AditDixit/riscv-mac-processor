@@ -2,11 +2,14 @@
 """Tiny assembler and instruction-set simulator for the riscv-mac-processor core.
 
 Supported: add sub and or xor sll srl sra slt sltu mul, addi andi ori xori
-slli srli srai slti sltiu, lw sw, beq bne blt bge bltu bgeu, lui auipc jal jalr,
-mac (custom-0: rd = rd + rs1*rs2), plus pseudo-ops nop, li, mv, j.
+slli srli srai slti sltiu, lb lh lw lbu lhu sb sh sw, beq bne blt bge bltu bgeu,
+lui auipc jal jalr, fence (no-op), mac (custom-0: rd = rd + rs1*rs2),
+plus pseudo-ops nop, li, mv, j.
 
 Memory model matches the RTL: 256-word instruction and data memories, indexed
-by addr[9:2] (so addresses wrap at 1 KB), word accesses only.
+by addr[9:2] (so addresses wrap at 1 KB). Byte accesses use addr[1:0];
+halfword accesses use addr[1] and ignore addr[0]; word accesses ignore
+addr[1:0] (misaligned accesses are not trapped, matching lsu_align.v).
 """
 import re
 
@@ -24,6 +27,8 @@ R_OPS = {'add': (0, 0), 'sub': (0, 0x20), 'sll': (1, 0), 'slt': (2, 0), 'sltu': 
 I_OPS = {'addi': 0, 'slti': 2, 'sltiu': 3, 'xori': 4, 'ori': 6, 'andi': 7}
 SH_OPS = {'slli': (1, 0), 'srli': (5, 0), 'srai': (5, 0x20)}
 B_OPS = {'beq': 0, 'bne': 1, 'blt': 4, 'bge': 5, 'bltu': 6, 'bgeu': 7}
+L_OPS = {'lb': 0, 'lh': 1, 'lw': 2, 'lbu': 4, 'lhu': 5}
+S_OPS = {'sb': 0, 'sh': 1, 'sw': 2}
 
 
 def reg(name):
@@ -98,12 +103,15 @@ def assemble(src):
         elif op in SH_OPS:
             f3, f7 = SH_OPS[op]
             w = (f7 << 25) | ((int(a[2], 0) & 31) << 20) | (reg(a[1]) << 15) | (f3 << 12) | (reg(a[0]) << 7) | 0x13
-        elif op == 'lw':
+        elif op in L_OPS:
             imm, rs1 = mem(a[1])
-            w = ((imm & 0xFFF) << 20) | (rs1 << 15) | (2 << 12) | (reg(a[0]) << 7) | 0x03
-        elif op == 'sw':
+            w = ((imm & 0xFFF) << 20) | (rs1 << 15) | (L_OPS[op] << 12) | (reg(a[0]) << 7) | 0x03
+        elif op in S_OPS:
             imm, rs1 = mem(a[1])
-            w = (((imm >> 5) & 0x7F) << 25) | (reg(a[0]) << 20) | (rs1 << 15) | (2 << 12) | ((imm & 0x1F) << 7) | 0x23
+            w = (((imm >> 5) & 0x7F) << 25) | (reg(a[0]) << 20) | (rs1 << 15) | (S_OPS[op] << 12) | \
+                ((imm & 0x1F) << 7) | 0x23
+        elif op == 'fence':
+            w = 0x0FF0000F  # fence iorw, iorw
         elif op in B_OPS:
             o = tgt(a[2]) & 0x1FFF
             w = (((o >> 12) & 1) << 31) | (((o >> 5) & 0x3F) << 25) | (reg(a[1]) << 20) | (reg(a[0]) << 15) | \
@@ -159,10 +167,30 @@ def run_iss(words, data=None, max_steps=2_000_000):
             res = {0: a + immI, 1: a << sh, 2: int(sa < immI), 3: int(a < (immI & M32)), 4: a ^ immI,
                    5: (sa >> sh) if (w >> 30) & 1 else a >> sh, 6: a | immI, 7: a & immI}[f3]
         elif op == 0x03:
-            res = dmem[((a + immI) & M32) >> 2 & 255]
+            ea = (a + immI) & M32
+            word = dmem[ea >> 2 & 255]
+            if f3 & 3 == 0:                       # lb / lbu
+                v = (word >> (8 * (ea & 3))) & 0xFF
+                res = v if f3 & 4 else sx(v, 8)
+            elif f3 & 3 == 1:                     # lh / lhu (addr[0] ignored)
+                v = (word >> (16 * ((ea >> 1) & 1))) & 0xFFFF
+                res = v if f3 & 4 else sx(v, 16)
+            else:                                 # lw
+                res = word
         elif op == 0x23:
             imm = sx(((w >> 25) << 5) | ((w >> 7) & 31), 12)
-            dmem[((a + imm) & M32) >> 2 & 255] = b
+            ea = (a + imm) & M32
+            i = ea >> 2 & 255
+            if f3 == 0:                           # sb
+                sh = 8 * (ea & 3)
+                dmem[i] = (dmem[i] & ~(0xFF << sh) & M32) | ((b & 0xFF) << sh)
+            elif f3 == 1:                         # sh (addr[0] ignored)
+                sh = 16 * ((ea >> 1) & 1)
+                dmem[i] = (dmem[i] & ~(0xFFFF << sh) & M32) | ((b & 0xFFFF) << sh)
+            else:                                 # sw
+                dmem[i] = b
+        elif op == 0x0F:                          # fence: no-op on a single in-order hart
+            pass
         elif op == 0x63:
             imm = sx(((w >> 31) << 12) | (((w >> 7) & 1) << 11) | (((w >> 25) & 0x3F) << 5) | (((w >> 8) & 0xF) << 1), 13)
             t = {0: a == b, 1: a != b, 4: sa < sb, 5: sa >= sb, 6: a < b, 7: a >= b}[f3]
