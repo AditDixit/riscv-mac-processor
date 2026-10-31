@@ -63,3 +63,8 @@ set_global_assignment -name VERILOG_FILE control.v
 set_global_assignment -name VERILOG_FILE pipeline_reg.v
 set_global_assignment -name VERILOG_FILE Hazard_units.v
 set_global_assignment -name VERILOG_FILE Forward_units.v
+set_global_assignment -name VERILOG_FILE lsu_align.v
+# Program-load port on the instruction memory; without it the empty
+# instruction ROM lets synthesis remove the whole core (see Imem.v)
+set_global_assignment -name VERILOG_MACRO "FPGA_PROG_PORT=1"
+set_global_assignment -name SDC_FILE RISC_V.sdc

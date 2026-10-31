@@ -1,6 +1,6 @@
 // ============================================================
-// Tb_memory_regfile.v  —  Smoke-test for imem, dmem, regfile
-// Run: iverilog -o tb_mem Tb_memory_regfile.v Imem.v dmem.v RegFile.v
+// Tb_memory_regfile.v  —  Smoke-test for imem, dmem, lsu_align, regfile
+// Run: iverilog -o tb_mem Tb_memory_regfile.v Imem.v dmem.v lsu_align.v RegFile.v
 //      vvp tb_mem
 // ============================================================
 `timescale 1ns/1ps
@@ -19,10 +19,21 @@ module tb_memory_regfile;
 
     // ---- dmem -------------------------------------------------
     reg         dmem_we;
+    reg  [3:0]  dmem_be;
     reg  [31:0] dmem_addr, dmem_wd;
     wire [31:0] dmem_rd;
-    dmem u_dmem (.clk(clk), .we(dmem_we), .addr(dmem_addr),
+    dmem u_dmem (.clk(clk), .we(dmem_we), .be(dmem_be), .addr(dmem_addr),
                  .wd(dmem_wd), .rd(dmem_rd));
+
+    // ---- lsu_align (byte-lane steering) -----------------------
+    reg  [2:0]  lsu_f3;
+    reg  [1:0]  lsu_off;
+    reg  [31:0] lsu_st, lsu_word;
+    wire [31:0] lsu_sd, lsu_ld;
+    wire [3:0]  lsu_be;
+    lsu_align u_lsu (.funct3(lsu_f3), .addr_lo(lsu_off), .store_in(lsu_st),
+                     .load_word(lsu_word), .store_data(lsu_sd),
+                     .byte_en(lsu_be), .load_data(lsu_ld));
 
     // ---- regfile ----------------------------------------------
     reg         rf_we;
@@ -51,7 +62,7 @@ module tb_memory_regfile;
 
     initial begin
         // -- dmem: write then read ------------------------------
-        dmem_we = 0; dmem_addr = 0; dmem_wd = 0;
+        dmem_we = 0; dmem_be = 4'b1111; dmem_addr = 0; dmem_wd = 0;
 
         @(posedge clk); #1;
         dmem_we = 1; dmem_addr = 32'h00000004; dmem_wd = 32'hDEADBEEF;
@@ -63,6 +74,37 @@ module tb_memory_regfile;
         @(posedge clk); #1;
         dmem_we = 0;
         check(dmem_rd, 32'hCAFEBABE, "dmem second write/read");
+
+        // -- dmem byte enables: only enabled lanes change --------
+        dmem_we = 1; dmem_addr = 32'h00000004; dmem_wd = 32'h0000AB00; dmem_be = 4'b0010;
+        @(posedge clk); #1;
+        dmem_we = 0;
+        check(dmem_rd, 32'hDEADABEF, "dmem byte lane 1");
+        dmem_we = 1; dmem_wd = 32'h12340000; dmem_be = 4'b1100;
+        @(posedge clk); #1;
+        dmem_we = 0; dmem_be = 4'b1111;
+        check(dmem_rd, 32'h1234ABEF, "dmem upper half");
+
+        // -- lsu_align: load extension -------------------------
+        lsu_word = 32'h80FF7F01; lsu_st = 32'h12345678;
+        lsu_f3 = 3'b000; lsu_off = 2'd3; #1; check(lsu_ld, 32'hFFFFFF80, "lb sign-extend");
+        lsu_f3 = 3'b100; lsu_off = 2'd3; #1; check(lsu_ld, 32'h00000080, "lbu zero-extend");
+        lsu_f3 = 3'b000; lsu_off = 2'd0; #1; check(lsu_ld, 32'h00000001, "lb byte 0");
+        lsu_f3 = 3'b000; lsu_off = 2'd1; #1; check(lsu_ld, 32'h0000007F, "lb byte 1");
+        lsu_f3 = 3'b001; lsu_off = 2'd2; #1; check(lsu_ld, 32'hFFFF80FF, "lh sign-extend");
+        lsu_f3 = 3'b101; lsu_off = 2'd2; #1; check(lsu_ld, 32'h000080FF, "lhu zero-extend");
+        lsu_f3 = 3'b001; lsu_off = 2'd0; #1; check(lsu_ld, 32'h00007F01, "lh low half");
+        lsu_f3 = 3'b010; lsu_off = 2'd0; #1; check(lsu_ld, 32'h80FF7F01, "lw full word");
+
+        // -- lsu_align: store lanes and byte enables ------------
+        lsu_f3 = 3'b000; lsu_off = 2'd2; #1;
+        check({lsu_sd, 28'b0, lsu_be}, {32'h78787878, 32'h4}, "sb lanes, be");
+        lsu_f3 = 3'b001; lsu_off = 2'd2; #1;
+        check({lsu_sd, 28'b0, lsu_be}, {32'h56785678, 32'hC}, "sh lanes, be");
+        lsu_f3 = 3'b001; lsu_off = 2'd0; #1;
+        check({lsu_sd, 28'b0, lsu_be}, {32'h56785678, 32'h3}, "sh low, be");
+        lsu_f3 = 3'b010; lsu_off = 2'd0; #1;
+        check({lsu_sd, 28'b0, lsu_be}, {32'h12345678, 32'hF}, "sw lanes, be");
 
         // -- regfile: basic write/read --------------------------
         rf_we = 0; rf_ra1 = 0; rf_ra2 = 0; rf_ra_acc = 0; rf_wa3 = 0; rf_wd3 = 0;

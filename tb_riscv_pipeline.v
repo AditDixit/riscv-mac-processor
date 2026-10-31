@@ -49,10 +49,16 @@
 //   addi x30, x0, 99      // SKIPPED
 //   addi x31, x0, 7       // jump target
 //
+// TEST 8 — Byte/halfword loads and stores, FENCE
+//   (dmem word 8 = 0x80FF7F01)
+//   lb/lbu of byte 3, lh/lhu of the upper half, a load-use stall on lb,
+//   sb and sh into fresh words (other lanes must stay zero), a lb that
+//   reads back the sb byte, and an instruction after a fence.
+//
 // Run:
 //   iverilog -o tb_pip tb_riscv_pipeline.v Riscv_pipeline.v \
 //            pipeline_reg.v Hazard_units.v Forward_units.v \
-//            Imem.v dmem.v RegFile.v ALU.v control.v
+//            Imem.v dmem.v lsu_align.v RegFile.v ALU.v control.v
 //   vvp tb_pip
 // ============================================================
 `timescale 1ns/1ps
@@ -152,6 +158,7 @@ module tb_riscv_pipeline;
             uut.u_dmem.mem[i] = 32'b0;
         end
         uut.u_dmem.mem[4] = 32'd100;   // data for TEST 5 (byte address 16)
+        uut.u_dmem.mem[8] = 32'h80FF7F01; // data for TEST 8 (byte address 32)
 
         // ── TEST 1: ALU + EX-EX forwarding ─────────────────
         // addr 0
@@ -203,15 +210,29 @@ module tb_riscv_pipeline;
         uut.u_imem.mem[40] = jtype(32'd8, 5'd29);                           // jal x29,+8
         uut.u_imem.mem[41] = itype(12'd99, 5'd0, 3'b000, 5'd30, OP_IARITH); // addi x30,x0,99 SKIPPED
         uut.u_imem.mem[42] = itype(12'd7,  5'd0, 3'b000, 5'd31, OP_IARITH); // addi x31,x0,7
+
+        // ── TEST 8: Byte/halfword loads and stores, FENCE ───
+        // dmem word 8 (bytes 32..35) = 0x80FF7F01
+        uut.u_imem.mem[44] = itype(12'd35, 5'd0,  3'b000, 5'd15, OP_LOAD);   // lb  x15,35(x0)
+        uut.u_imem.mem[45] = itype(12'd1,  5'd15, 3'b000, 5'd16, OP_IARITH); // addi x16,x15,1 (load-use)
+        uut.u_imem.mem[46] = itype(12'd35, 5'd0,  3'b100, 5'd17, OP_LOAD);   // lbu x17,35(x0)
+        uut.u_imem.mem[47] = itype(12'd34, 5'd0,  3'b001, 5'd18, OP_LOAD);   // lh  x18,34(x0)
+        uut.u_imem.mem[48] = itype(12'd34, 5'd0,  3'b101, 5'd19, OP_LOAD);   // lhu x19,34(x0)
+        uut.u_imem.mem[49] = itype(12'h5A, 5'd0,  3'b000, 5'd20, OP_IARITH); // addi x20,x0,0x5A
+        uut.u_imem.mem[50] = stype(12'd41, 5'd20, 5'd0, 3'b000, OP_STORE);   // sb  x20,41(x0)
+        uut.u_imem.mem[51] = stype(12'd46, 5'd18, 5'd0, 3'b001, OP_STORE);   // sh  x18,46(x0)
+        uut.u_imem.mem[52] = itype(12'd41, 5'd0,  3'b000, 5'd21, OP_LOAD);   // lb  x21,41(x0)
+        uut.u_imem.mem[53] = 32'h0FF0000F;                                   // fence (no-op)
+        uut.u_imem.mem[54] = itype(12'd3,  5'd0,  3'b000, 5'd22, OP_IARITH); // addi x22,x0,3
         // NOPs fill rest
 
         // ── Reset release ───────────────────────────────────
         @(posedge clk); #1;
         rst = 0;
 
-        // Run enough cycles: 43 instrs + 4 pipeline stages + branch/jump
-        // penalties + 2 load stalls is well under 70; 90 leaves margin.
-        repeat(90) @(posedge clk);
+        // Run enough cycles: 55 instrs + 4 pipeline stages + branch/jump
+        // penalties + 3 load stalls is well under 80; 120 leaves margin.
+        repeat(120) @(posedge clk);
         #1;
 
         // ── Check results ───────────────────────────────────
@@ -249,6 +270,17 @@ module tb_riscv_pipeline;
         chk(`RF[29], 32'd164, "x29 = 164 (jal link = pc+4)");
         chk(`RF[30], 32'd0,   "x30 = 0   (jal skipped instr)");
         chk(`RF[31], 32'd7,   "x31 = 7   (jal target ran)");
+
+        $display("\n=== TEST 8: Sub-word loads/stores, FENCE ===");
+        chk(`RF[15], 32'hFFFFFF80, "x15 = lb  sign-extended byte 3");
+        chk(`RF[16], 32'hFFFFFF81, "x16 = lb -> addi (load-use stall)");
+        chk(`RF[17], 32'h00000080, "x17 = lbu zero-extended byte 3");
+        chk(`RF[18], 32'hFFFF80FF, "x18 = lh  sign-extended upper half");
+        chk(`RF[19], 32'h000080FF, "x19 = lhu zero-extended upper half");
+        chk(`MEM[10], 32'h00005A00, "mem[10]: sb wrote byte lane 1 only");
+        chk(`MEM[11], 32'h80FF0000, "mem[11]: sh wrote upper half only");
+        chk(`RF[21], 32'h0000005A, "x21 = lb reads back the sb byte");
+        chk(`RF[22], 32'd3,        "x22 = 3 (instr after fence ran)");
 
         if (errors == 0)
             $display("\n=== ALL PIPELINE TESTS PASSED ===");

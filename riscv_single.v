@@ -1,5 +1,5 @@
 // ============================================================
-// riscv_single.v  —  Single-Cycle RV32I + MAC Processor
+// riscv_single.v  —  Single-Cycle RV32I + MUL + MAC Processor
 //
 // Datapath summary:
 //   PC  →  IMEM  →  Decode  →  RegFile read
@@ -112,11 +112,18 @@ module riscv_single (
     wire [31:0] mac_result = acc_val + alu_result;
 
     // ── Data memory ───────────────────────────────────────────
-    wire [31:0] dmem_rd;
+    wire [31:0] dmem_word, dmem_rd, store_data;
+    wire [3:0]  byte_en;
+    lsu_align u_lsu (
+        .funct3(funct3),         .addr_lo(alu_result[1:0]),
+        .store_in(rf_rd2),       .load_word(dmem_word),
+        .store_data(store_data), .byte_en(byte_en),
+        .load_data(dmem_rd)
+    );
     dmem u_dmem (
-        .clk(clk), .we(mem_write),
-        .addr(alu_result), .wd(rf_rd2),
-        .rd(dmem_rd)
+        .clk(clk), .we(mem_write), .be(byte_en),
+        .addr(alu_result), .wd(store_data),
+        .rd(dmem_word)
     );
 
     // ── Branch logic ─────────────────────────────────────────

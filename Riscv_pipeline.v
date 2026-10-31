@@ -1,9 +1,17 @@
 // ============================================================
-// riscv_pipeline.v  —  5-Stage Pipelined RV32I + MAC Processor
+// riscv_pipeline.v  —  5-Stage Pipelined RV32I + MUL + MAC Processor
+// (ECALL/EBREAK decode as no-ops: there is no trap/CSR support.
+//  FENCE is a no-op, which is correct for a single in-order hart.)
 // ============================================================
 module riscv_pipeline (
     input  wire        clk,
     input  wire        rst,
+`ifdef FPGA_PROG_PORT
+    // Program-load port, FPGA builds only (see Imem.v and synth/)
+    input  wire        prog_we,
+    input  wire [7:0]  prog_addr,
+    input  wire [31:0] prog_data,
+`endif
     output wire [31:0] pc_out
 );
 
@@ -43,7 +51,12 @@ module riscv_pipeline (
     end
 
     wire [31:0] instr_if;
-    imem u_imem (.addr(pc_if), .instr(instr_if));
+    imem u_imem (
+`ifdef FPGA_PROG_PORT
+        .clk(clk), .we(prog_we), .waddr(prog_addr), .wdata(prog_data),
+`endif
+        .addr(pc_if), .instr(instr_if)
+    );
 
 // ================================================================
 // IF/ID REGISTER
@@ -268,14 +281,31 @@ module riscv_pipeline (
 // ================================================================
 // MEM STAGE
 // ================================================================
-    wire [31:0] mem_rdata;
+    // funct3 of the instruction now in MEM (load/store width and signedness).
+    // The EX/MEM register is never stalled or flushed, so a plain latch suffices.
+    reg [2:0] mem_funct3;
+    always @(posedge clk) begin
+        if (rst) mem_funct3 <= 3'b0;
+        else     mem_funct3 <= ex_funct3;
+    end
+
+    wire [31:0] mem_word, mem_rdata, mem_store_data;
+    wire [3:0]  mem_byte_en;
+
+    lsu_align u_lsu (
+        .funct3(mem_funct3),        .addr_lo(mem_alu_result[1:0]),
+        .store_in(mem_write_data),  .load_word(mem_word),
+        .store_data(mem_store_data),.byte_en(mem_byte_en),
+        .load_data(mem_rdata)
+    );
 
     dmem u_dmem (
         .clk(clk),
         .we(mem_mem_write),
+        .be(mem_byte_en),
         .addr(mem_alu_result),
-        .wd(mem_write_data),
-        .rd(mem_rdata)
+        .wd(mem_store_data),
+        .rd(mem_word)
     );
 
 // ================================================================
@@ -305,7 +335,7 @@ module riscv_pipeline (
     // non-MAC instructions too (set to alu_result in EX above),
     // so we only need three cases here:
     assign wb_result =
-        wb_mem_to_reg ? wb_mem_data   :   // LW
+        wb_mem_to_reg ? wb_mem_data   :   // loads (already extended in MEM)
         wb_mac_op     ? wb_mac_result :   // MAC
         wb_alu_result;                    // ALU / JAL(link in alu_result)
 
