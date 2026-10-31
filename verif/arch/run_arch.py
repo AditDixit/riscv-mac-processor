@@ -42,7 +42,7 @@ def fetch(work):
 
 
 def build_tb(work):
-    cmd = ["verilator", "--binary", "--timing", "-Wno-fatal", "-Wno-lint", "-Wno-style",
+    cmd = ["verilator", "--binary", "--timing", "-Wno-fatal", "-Wno-lint", "-Wno-style", *simrun.DEFINES,
            "--top-module", "tb_arch", "-Mdir", os.path.join(work, "obj"),
            "-CFLAGS", "-std=c++20 -fcoroutines", os.path.join(HERE, "tb_arch.v")] + \
           [os.path.join(RTL, s) for s in simrun.SRCS]

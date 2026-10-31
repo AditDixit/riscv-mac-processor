@@ -5,7 +5,12 @@ import rvtools
 HERE = os.path.dirname(os.path.abspath(__file__))
 RTL = os.path.dirname(HERE)
 SRCS = ["ALU.v", "Forward_units.v", "Hazard_units.v", "Imem.v", "RegFile.v",
-        "Riscv_pipeline.v", "control.v", "dmem.v", "lsu_align.v", "mul_pipe.v", "pipeline_reg.v"]
+        "Riscv_pipeline.v", "control.v", "dmem.v", "lsu_align.v", "mul_pipe.v", "pipeline_reg.v",
+        "imem_sync.v", "dmem_sync.v"]
+
+# Extra Verilog defines for every build, e.g. RTL_DEFINES="FPGA_SYNC_MEM" to
+# simulate the block-RAM memory variant that the Quartus/MAX 10 build uses.
+DEFINES = [f"-D{d}" for d in os.environ.get("RTL_DEFINES", "").split()]
 
 
 def build(workdir):
@@ -13,7 +18,7 @@ def build(workdir):
     vroot = env.get("VERILATOR_ROOT", "")
     exe = os.path.join(vroot, "bin", "verilator") if vroot else "verilator"
     cmd = [exe, "--binary", "--timing", "-Wno-fatal", "-Wno-lint", "-Wno-style",
-           "--top-module", "tb_prog_runner", "-Mdir", workdir,
+           "--top-module", "tb_prog_runner", "-Mdir", workdir, *DEFINES,
            "-CFLAGS", "-std=c++20 -fcoroutines",
            os.path.join(HERE, "tb_prog_runner.v")] + [os.path.join(RTL, s) for s in SRCS]
     subprocess.run(cmd, check=True, capture_output=True, text=True, env=env)

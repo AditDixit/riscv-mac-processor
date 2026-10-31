@@ -208,6 +208,20 @@ synth/run_fmax.sh                                 # with MAC
 EXTRA_DEFINES=-DNO_MAC_EXT synth/run_fmax.sh synth/build_nomac   # without
 ```
 
+### Running everything in Quartus Prime and Questa (Intel MAX 10)
+
+The same checks run in the Intel toolchain with no Verilator or RISC-V compiler, only Python 3 and Questa (the simulator installed with Quartus Prime):
+
+```bash
+python verif/questa/gen_vectors.py verif/questa/vectors   # pure Python, ~10 s
+python verif/questa/run_questa.py all                     # Questa: 180 checks, 14 directed,
+                                                          # 20 benchmarks, 8,000 random, 39 arch tests
+```
+
+`run_questa.py` simulates the `FPGA_SYNC_MEM` memories (`imem_sync.v`, `dmem_sync.v`), the exact RTL that the Quartus build synthesises. These keep a registered read address, as MAX 10 M9K block RAM requires, and are cycle-for-cycle identical to `imem.v` / `dmem.v` (every suite gives the same results with either). The official architecture tests run from prebuilt images in `verif/questa/arch` (made by `verif/questa/export_arch.py`).
+
+For implementation, open `RISC_V.qpf` and compile: the project sets `FPGA_PROG_PORT`, `FPGA_SYNC_MEM` and a 50 MHz constraint. Uncomment `NO_MAC_EXT` in `RISC_V.qsf` to measure the MAC's cost. The `baseline-single-cycle-mul` branch is the design before the multiplier was pipelined, with the same memories, for a like-for-like before/after comparison.
+
 ## Implementation results
 
 ### Place and route, Lattice ECP5 (`synth/run_fmax.sh`)
@@ -236,6 +250,7 @@ The FPGA build defines `FPGA_PROG_PORT`, which gives the instruction memory a pr
 ├── dmem.v                Data memory (2^AW words, byte-enable writes)
 ├── lsu_align.v           Byte-lane steering: store lanes/byte enables, load extension
 ├── mul_pipe.v            Two-stage multiplier (16×16 partial products in EX, sum in MEM)
+├── imem_sync.v / dmem_sync.v  Block-RAM memories for MAX 10 (FPGA_SYNC_MEM), cycle-identical
 ├── RegFile.v             32×32 register file (2 read ports + accumulator read port)
 ├── ALU.v                 ALU: all RV32I ops (+ single-cycle MUL for the single-cycle core)
 ├── control.v             Main decoder + ALU decoder + imm_gen
@@ -261,7 +276,8 @@ The FPGA build defines `FPGA_PROG_PORT`, which gives the instruction memory a pr
 │   ├── bench.py              MAC vs mul+add benchmark suite
 │   ├── perf.py               CPI and hazard statistics
 │   ├── coverage.py           Line/branch/toggle coverage
-│   └── arch/                 Official riscv-arch-test runner (target macros, link script, testbench)
+│   ├── arch/                 Official riscv-arch-test runner (target macros, link script, testbench)
+│   └── questa/               Questa/ModelSim flow: batch testbench, vector generator, prebuilt arch tests
 ├── synth/run_fmax.sh     Open-source ECP5 synthesis + place and route
 ├── RISC_V.qpf/.qsf/.sdc  Quartus project (MAX 10, top = riscv_pipeline)
 └── LICENSE

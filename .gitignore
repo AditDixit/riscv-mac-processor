@@ -36,3 +36,5 @@ __pycache__/
 build_dir/
 cov_dir/
 synth/build/
+verif/questa/build/
+verif/questa/vectors/

@@ -65,7 +65,14 @@ set_global_assignment -name VERILOG_FILE Hazard_units.v
 set_global_assignment -name VERILOG_FILE Forward_units.v
 set_global_assignment -name VERILOG_FILE lsu_align.v
 set_global_assignment -name VERILOG_FILE mul_pipe.v
+set_global_assignment -name VERILOG_FILE imem_sync.v
+set_global_assignment -name VERILOG_FILE dmem_sync.v
 # Program-load port on the instruction memory; without it the empty
 # instruction ROM lets synthesis remove the whole core (see Imem.v)
 set_global_assignment -name VERILOG_MACRO "FPGA_PROG_PORT=1"
+# MAX 10 M9K block RAM needs a registered read address: use the
+# cycle-identical imem_sync/dmem_sync memories (see those files)
+set_global_assignment -name VERILOG_MACRO "FPGA_SYNC_MEM=1"
+# Uncomment to build without the MAC instruction (area/Fmax cost of MAC):
+# set_global_assignment -name VERILOG_MACRO "NO_MAC_EXT=1"
 set_global_assignment -name SDC_FILE RISC_V.sdc

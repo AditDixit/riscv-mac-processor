@@ -47,7 +47,7 @@ def build(work):
     main = os.path.join(work, "cov_main.cpp")
     open(main, "w").write(MAIN_CPP)
     cmd = ["verilator", "--cc", "--exe", "--build", "--timing", "--coverage-line", "--coverage-toggle",
-           "-Wno-fatal", "-Wno-lint", "-Wno-style", "--top-module", "tb_prog_runner",
+           "-Wno-fatal", "-Wno-lint", "-Wno-style", *simrun.DEFINES, "--top-module", "tb_prog_runner",
            "-Mdir", work, "-CFLAGS", "-std=c++20 -fcoroutines", main,
            os.path.join(HERE, "tb_prog_runner.v")] + [os.path.join(RTL, s) for s in simrun.SRCS]
     subprocess.run(cmd, check=True, capture_output=True, text=True)
