@@ -125,11 +125,16 @@ module main_decoder (
             end
 
             // MAC  custom-0  (acc = acc + rs1 * rs2)
+            // Defining NO_MAC_EXT removes the instruction (it decodes as a
+            // no-op); synth/run_fmax.sh uses this to measure what the MAC
+            // extension costs in area and clock speed.
+`ifndef NO_MAC_EXT
             7'b0001011: begin
                 reg_write = 1'b1;   // writes accumulator back to rd
                 mac_op    = 1'b1;
                 alu_op    = 2'b11;  // tells alu_decoder → MUL
             end
+`endif
 
             default: begin /* NOP / illegal — all signals stay 0 */ end
         endcase

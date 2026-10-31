@@ -58,7 +58,7 @@
 // Run:
 //   iverilog -o tb_pip tb_riscv_pipeline.v Riscv_pipeline.v \
 //            pipeline_reg.v Hazard_units.v Forward_units.v \
-//            Imem.v dmem.v lsu_align.v RegFile.v ALU.v control.v
+//            Imem.v dmem.v lsu_align.v mul_pipe.v RegFile.v ALU.v control.v
 //   vvp tb_pip
 // ============================================================
 `timescale 1ns/1ps

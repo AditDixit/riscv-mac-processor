@@ -47,7 +47,7 @@ def build(work):
     main = os.path.join(work, "cov_main.cpp")
     open(main, "w").write(MAIN_CPP)
     cmd = ["verilator", "--cc", "--exe", "--build", "--timing", "--coverage-line", "--coverage-toggle",
-           "-Wno-fatal", "-Wno-lint", "-Wno-style", "--top-module", "tb_prog_runner",
+           "-Wno-fatal", "-Wno-lint", "-Wno-style", *simrun.DEFINES, "--top-module", "tb_prog_runner",
            "-Mdir", work, "-CFLAGS", "-std=c++20 -fcoroutines", main,
            os.path.join(HERE, "tb_prog_runner.v")] + [os.path.join(RTL, s) for s in simrun.SRCS]
     subprocess.run(cmd, check=True, capture_output=True, text=True)
@@ -90,30 +90,42 @@ def main():
     merged = os.path.join(work, "merged.dat")
     subprocess.run(["verilator_coverage", "--write", merged] + files, check=True, capture_output=True)
     ann = os.path.join(work, "annotated")
-    r = subprocess.run(["verilator_coverage", "--annotate", ann, "--annotate-min", "1", merged],
-                       check=True, capture_output=True, text=True)
+    subprocess.run(["verilator_coverage", "--annotate", ann, "--annotate-min", "1", merged],
+                   check=True, capture_output=True, text=True)
 
-    # Per-file line coverage from the annotated sources (RTL files only).
+    # Count coverage points per type straight from the merged data file,
+    # RTL only (the testbench's own points are excluded).
+    tot, hit, miss = {}, {}, {}
+    for line in open(merged):
+        if not line.startswith("C '"):
+            continue
+        body, cnt = line.rsplit("' ", 1)
+        f = dict(re.findall(r"\x01(\w+)\x02([^\x01']*)", body))
+        typ = f.get("page", "?").split("/")[0].replace("v_", "")
+        src = os.path.basename(f.get("f", ""))
+        if src == "tb_prog_runner.v":
+            continue
+        tot[typ] = tot.get(typ, 0) + 1
+        if int(cnt) > 0:
+            hit[typ] = hit.get(typ, 0) + 1
+        else:
+            name = re.sub(r"\[\d+\]", "", f.get("o", ""))
+            miss.setdefault(typ, {}).setdefault(f"{src}:{f.get('l')} {name}", 0)
+            miss[typ][f"{src}:{f.get('l')} {name}"] += 1
+
     print(f"programs run: {len(progs)} ({len(TESTS)} directed, {2 * len(bench.NAMES)} kernels, "
           f"{n_rand} random)")
-    print("| RTL file | Lines hit / instrumented | Line coverage |")
+    print("| Metric | Covered | Percent |")
     print("|---|---|---|")
-    th = tt = 0
-    for src in simrun.SRCS:
-        path = os.path.join(ann, src)
-        if not os.path.exists(path):
-            continue
-        hit = tot = 0
-        for line in open(path):
-            m = re.match(r"^[ %](\d{6})", line)
-            if m:
-                tot += 1
-                hit += int(m.group(1)) > 0
-        if tot:
-            th += hit; tt += tot
-            print(f"| {src} | {hit} / {tot} | {100 * hit / tot:.1f}% |")
-    print(f"| **Total** | {th} / {tt} | **{100 * th / tt:.1f}%** |")
-    print("verilator_coverage summary:", " ".join(r.stdout.split()[-8:]))
+    for typ in ("line", "branch", "toggle"):
+        if typ in tot:
+            h = hit.get(typ, 0)
+            print(f"| {typ} | {h} / {tot[typ]} | {100 * h / tot[typ]:.1f}% |")
+    for typ, m in miss.items():
+        print(f"uncovered {typ} points:")
+        for k, n in sorted(m.items(), key=lambda kv: -kv[1]):
+            print(f"  {n:4d}  {k}")
+    print(f"annotated sources: {ann} (lines prefixed %000000 never ran)")
 
 
 if __name__ == "__main__":

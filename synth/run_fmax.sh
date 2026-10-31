@@ -11,6 +11,8 @@
 #
 # Usage  : synth/run_fmax.sh [build-dir] [seeds...]
 #          defaults: build dir synth/build, seeds 1 2 3
+#          EXTRA_DEFINES="-DNO_MAC_EXT" builds the core without the MAC
+#          instruction, to measure the extension's cost
 # Output : utilisation and per-seed Fmax, plus summary.txt
 # ============================================================
 set -euo pipefail
@@ -21,11 +23,11 @@ SEEDS=${*:-1 2 3}
 mkdir -p "$OUT"
 
 SRCS="ALU.v Forward_units.v Hazard_units.v Imem.v RegFile.v control.v \
-      dmem.v lsu_align.v pipeline_reg.v Riscv_pipeline.v"
+      dmem.v lsu_align.v mul_pipe.v imem_sync.v dmem_sync.v pipeline_reg.v Riscv_pipeline.v"
 
 cd "$ROOT"
 yosys -q -l "$OUT/yosys.log" -p "
-    read_verilog -DFPGA_PROG_PORT $SRCS;
+    read_verilog -DFPGA_PROG_PORT ${EXTRA_DEFINES:-} $SRCS;
     synth_ecp5 -top riscv_pipeline -json $OUT/top.json"
 
 for s in $SEEDS; do
@@ -36,7 +38,7 @@ done
 wait
 
 {
-    echo "Device: LFE5U-25F CABGA381, seeds: $SEEDS"
+    echo "Device: LFE5U-25F CABGA381, seeds: $SEEDS ${EXTRA_DEFINES:-}"
     grep -E "TRELLIS_COMB:|TRELLIS_FF:|TRELLIS_RAMW:|DP16KD:|MULT18X18D:" \
          "$OUT/pnr_seed${SEEDS%% *}.log" | head -5 | sed 's/^Info: *//'
     for s in $SEEDS; do

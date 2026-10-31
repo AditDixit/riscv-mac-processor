@@ -3,13 +3,15 @@
 // (ECALL/EBREAK decode as no-ops: there is no trap/CSR support.
 //  FENCE is a no-op, which is correct for a single in-order hart.)
 // ============================================================
-module riscv_pipeline (
+module riscv_pipeline #(
+    parameter MEM_AW = 8    // instruction/data memory size: 2^MEM_AW words each
+) (
     input  wire        clk,
     input  wire        rst,
 `ifdef FPGA_PROG_PORT
     // Program-load port, FPGA builds only (see Imem.v and synth/)
     input  wire        prog_we,
-    input  wire [7:0]  prog_addr,
+    input  wire [MEM_AW-1:0] prog_addr,
     input  wire [31:0] prog_data,
 `endif
     output wire [31:0] pc_out
@@ -51,12 +53,26 @@ module riscv_pipeline (
     end
 
     wire [31:0] instr_if;
-    imem u_imem (
-`ifdef FPGA_PROG_PORT
+`ifdef FPGA_SYNC_MEM
+    // Block-RAM-friendly memory (registered read address, e.g. MAX 10 M9K);
+    // cycle-for-cycle identical to imem.v, see imem_sync.v
+    imem_sync #(.AW(MEM_AW)) u_imem (
+        .clk(clk), .rst(rst), .en(!stall_pc), .next_addr(pc_next),
+  `ifdef FPGA_PROG_PORT
+        .we(prog_we), .waddr(prog_addr), .wdata(prog_data),
+  `else
+        .we(1'b0), .waddr({MEM_AW{1'b0}}), .wdata(32'b0),
+  `endif
+        .instr(instr_if)
+    );
+`else
+    imem #(.AW(MEM_AW)) u_imem (
+  `ifdef FPGA_PROG_PORT
         .clk(clk), .we(prog_we), .waddr(prog_addr), .wdata(prog_data),
-`endif
+  `endif
         .addr(pc_if), .instr(instr_if)
     );
+`endif
 
 // ================================================================
 // IF/ID REGISTER
@@ -181,8 +197,11 @@ module riscv_pipeline (
         .forward_a(fwd_a),           .forward_b(fwd_b)
     );
 
-    // EX/MEM forward value: use mac_result so MAC chains correctly
-    wire [31:0] ex_mem_fwd = mem_mac_result;
+    // EX/MEM forward value: the registered ALU result. A load or MUL/MAC
+    // in MEM has no result yet; the hazard unit stalls any instruction
+    // that needs one, so this path never has to carry them (and stays
+    // short: a register, no multiplier or adder in front of it).
+    wire [31:0] ex_mem_fwd = mem_alu_result;
 
     // Forwarding muxes
     wire [31:0] fwd_a_val =
@@ -205,33 +224,28 @@ module riscv_pipeline (
     wire [31:0] ex_alu_result;
     wire        ex_zero, ex_neg, ex_ovf;
 
-    alu u_alu (
+    // HAS_MUL=0: the multiply lives in mul_pipe (split across EX and MEM)
+    alu #(.HAS_MUL(0)) u_alu (
         .src_a(alu_in_a),       .src_b(alu_in_b),
         .alu_ctrl(ex_alu_ctrl),
         .result(ex_alu_result),
         .zero(ex_zero), .negative(ex_neg), .overflow(ex_ovf)
     );
 
-    // MAC accumulator with full bypass chain
-    // MEM stage is more recent than WB — check MEM first for accumulator
-    wire [31:0] mac_acc =
-        (mem_reg_write && mem_rd == ex_rd && ex_rd != 5'b0) ? mem_mac_result :
-        (wb_reg_write  && wb_rd  == ex_rd && ex_rd != 5'b0) ? wb_result      :
-        rf_acc;
+    // Multiplier stage 1: 16x16 partial products, registered at the end
+    // of EX (stage 2 completes the product in MEM, see mul_pipe.v).
+    // MUL/MAC never use the immediate or PC operands, so the forwarded
+    // register values feed the multiplier directly.
+    wire [31:0] mem_product;
+    mul_pipe u_mul (.clk(clk), .a(fwd_a_val), .b(fwd_b_val), .prod(mem_product));
 
-    wire [31:0] ex_mac_result = mac_acc + ex_alu_result;
+    wire ex_mul = (ex_alu_ctrl == 4'b1010);   // MUL or MAC
 
-    // JAL/JALR link value: PC+4 passed as alu_result into pipeline
-    // We mux here so ex_mem only needs to carry one result field
+    // JAL/JALR link value: PC+4 passed as alu_result into pipeline.
+    // (For MUL/MAC the ALU outputs 0; their result is formed in MEM.)
     wire [31:0] ex_result_final =
-        ex_jump    ? ex_pc4        :   // JAL/JALR: save return address
-        ex_mac_op  ? ex_mac_result :   // MAC
-        ex_alu_result;                 // everything else
-
-    // MAC result to carry forward (for EX/MEM→EX forwarding)
-    // When not MAC, carry alu_result in mac_result field so
-    // forwarding mux (ex_mem_fwd) always has the right value
-    wire [31:0] ex_mac_fwd = ex_mac_op ? ex_mac_result : ex_alu_result;
+        ex_jump ? ex_pc4 :         // JAL/JALR: save return address
+        ex_alu_result;             // everything else
 
     // Branch comparator
     wire blt  = ($signed(fwd_a_val) <  $signed(fwd_b_val));
@@ -268,7 +282,7 @@ module riscv_pipeline (
         .mem_read_in(ex_mem_read),      .mem_to_reg_in(ex_mem_to_reg),
         .mac_op_in(ex_mac_op),
         .pc_plus4_in(ex_pc4),
-        .alu_result_in(ex_result_final),.mac_result_in(ex_mac_fwd),
+        .alu_result_in(ex_result_final),.mac_result_in(ex_result_final),
         .write_data_in(fwd_b_val),      .rd_in(ex_rd),
         .reg_write_out(mem_reg_write),  .mem_write_out(mem_mem_write),
         .mem_read_out(mem_mem_read),    .mem_to_reg_out(mem_mem_to_reg),
@@ -289,6 +303,25 @@ module riscv_pipeline (
         else     mem_funct3 <= ex_funct3;
     end
 
+    // ── Multiplier stage 2 and MAC accumulate ───────────────────────
+    // mem_acc: the accumulator (rd) as read in EX through the register
+    // file's third port (which already includes any write happening in WB
+    // that cycle, via write-through).
+    // If the instruction just ahead of this MAC (now in WB) writes rd, its
+    // value is forwarded here, WB -> MEM. So a load, MUL or MAC feeding the
+    // accumulator never stalls, and MAC chains issue back to back.
+    reg        mem_mul;
+    reg [31:0] mem_acc;
+    always @(posedge clk) begin
+        if (rst) begin mem_mul <= 1'b0;   mem_acc <= 32'b0;  end
+        else     begin mem_mul <= ex_mul; mem_acc <= rf_acc; end
+    end
+
+    wire [31:0] mem_acc_fwd =
+        (wb_reg_write && wb_rd == mem_rd && mem_rd != 5'b0) ? wb_result : mem_acc;
+    wire [31:0] mem_mul_result = mem_product + (mem_mac_op ? mem_acc_fwd : 32'b0);
+    wire [31:0] mem_result     = mem_mul ? mem_mul_result : mem_alu_result;
+
     wire [31:0] mem_word, mem_rdata, mem_store_data;
     wire [3:0]  mem_byte_en;
 
@@ -299,7 +332,19 @@ module riscv_pipeline (
         .load_data(mem_rdata)
     );
 
-    dmem u_dmem (
+`ifdef FPGA_SYNC_MEM
+    // Block-RAM-friendly memory; identical behaviour, see dmem_sync.v
+    dmem_sync #(.AW(MEM_AW)) u_dmem (
+        .clk(clk),
+        .we(mem_mem_write),
+        .be(mem_byte_en),
+        .waddr(mem_alu_result),
+        .wd(mem_store_data),
+        .raddr_next(ex_result_final),
+        .rd(mem_word)
+    );
+`else
+    dmem #(.AW(MEM_AW)) u_dmem (
         .clk(clk),
         .we(mem_mem_write),
         .be(mem_byte_en),
@@ -307,6 +352,7 @@ module riscv_pipeline (
         .wd(mem_store_data),
         .rd(mem_word)
     );
+`endif
 
 // ================================================================
 // MEM/WB REGISTER
@@ -319,7 +365,7 @@ module riscv_pipeline (
         .reg_write_in(mem_reg_write),   .mem_to_reg_in(mem_mem_to_reg),
         .mac_op_in(mem_mac_op),
         .pc_plus4_in(mem_pc4),
-        .alu_result_in(mem_alu_result), .mac_result_in(mem_mac_result),
+        .alu_result_in(mem_result),     .mac_result_in(mem_result),
         .mem_data_in(mem_rdata),        .rd_in(mem_rd),
         .reg_write_out(wb_reg_write),   .mem_to_reg_out(wb_mem_to_reg),
         .mac_op_out(wb_mac_op),
@@ -331,24 +377,19 @@ module riscv_pipeline (
 // ================================================================
 // WB STAGE
 // ================================================================
-    // mac_result field carries the correct forwarded value for
-    // non-MAC instructions too (set to alu_result in EX above),
-    // so we only need three cases here:
     assign wb_result =
         wb_mem_to_reg ? wb_mem_data   :   // loads (already extended in MEM)
-        wb_mac_op     ? wb_mac_result :   // MAC
-        wb_alu_result;                    // ALU / JAL(link in alu_result)
+        wb_alu_result;                    // ALU, MUL/MAC (formed in MEM), JAL link
 
 // ================================================================
 // HAZARD UNIT
 // ================================================================
     hazard_unit u_haz (
         .id_ex_mem_read(ex_mem_read),
+        .id_ex_mul(ex_mul),
         .id_ex_rd(ex_rd),
         .if_id_rs1(id_rs1),
         .if_id_rs2(id_rs2),
-        .if_id_rd(id_rd),
-        .if_id_mac(id_mac_op),
         .branch_taken(branch_taken_ex),
         .jump(ex_jump),
         .stall(stall_pc),

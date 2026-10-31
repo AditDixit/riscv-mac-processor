@@ -11,7 +11,9 @@
 // PROGRAM 1 — Standard (mul + add):
 //   Uses M-extension MUL then ADD for each element.
 //   mul  t0, a0, b0
-//   add  acc, acc, t0    ← two instructions per element
+//   mul  t1, a1, b1
+//   add  acc, acc, t0    ← two instructions per element, scheduled so
+//   mul  t0, a2, b2         each add uses a product from two slots back
 //   ...
 //   Total: 2 instrs × 8 elements = 16 arithmetic instrs
 //
@@ -27,7 +29,7 @@
 // Run:
 //   iverilog -o tb_bench tb_benchmark.v Riscv_pipeline.v \
 //            pipeline_reg.v Hazard_units.v Forward_units.v \
-//            Imem.v dmem.v RegFile.v ALU.v control.v
+//            Imem.v dmem.v lsu_align.v mul_pipe.v RegFile.v ALU.v control.v
 //   vvp tb_bench
 // ============================================================
 `timescale 1ns/1ps
@@ -124,26 +126,26 @@ module tb_benchmark;
         // x1 = accumulator, clear to 0
         uut.u_imem.mem[16] = itype(12'd0, 5'd0, 3'b000, 5'd1,  OP_IARITH); // addi x1,x0,0
 
-        // --- Standard dot product: mul x2,ai,bi then add x1,x1,x2 ---
-        // STD_FIRST_PC = mem[17] = 17*4 = 68... let me adjust
-        // Actually mem indices: setup is [0..16], mul+add starts at [17]
-        // STD_FIRST_PC = 17*4 = 68
+        // --- Standard dot product, scheduled as a compiler would for a pipelined
+        // multiplier: two temporaries (x2, x4) alternate so every add uses a product
+        // from two instructions earlier (no multiply-use stall). Same 16 instructions,
+        // same addresses mem[17..32] (STD_FIRST_PC = 68). ---
         uut.u_imem.mem[17] = rtype(7'h01,5'd18,5'd10,3'b000,5'd2,OP_ARITH); // mul x2,x10,x18
-        uut.u_imem.mem[18] = rtype(7'h00,5'd2, 5'd1, 3'b000,5'd1,OP_ARITH); // add x1,x1,x2
-        uut.u_imem.mem[19] = rtype(7'h01,5'd19,5'd11,3'b000,5'd2,OP_ARITH); // mul x2,x11,x19
-        uut.u_imem.mem[20] = rtype(7'h00,5'd2, 5'd1, 3'b000,5'd1,OP_ARITH); // add x1,x1,x2
-        uut.u_imem.mem[21] = rtype(7'h01,5'd20,5'd12,3'b000,5'd2,OP_ARITH); // mul x2,x12,x20
-        uut.u_imem.mem[22] = rtype(7'h00,5'd2, 5'd1, 3'b000,5'd1,OP_ARITH); // add x1,x1,x2
-        uut.u_imem.mem[23] = rtype(7'h01,5'd21,5'd13,3'b000,5'd2,OP_ARITH); // mul x2,x13,x21
-        uut.u_imem.mem[24] = rtype(7'h00,5'd2, 5'd1, 3'b000,5'd1,OP_ARITH); // add x1,x1,x2
-        uut.u_imem.mem[25] = rtype(7'h01,5'd22,5'd14,3'b000,5'd2,OP_ARITH); // mul x2,x14,x22
-        uut.u_imem.mem[26] = rtype(7'h00,5'd2, 5'd1, 3'b000,5'd1,OP_ARITH); // add x1,x1,x2
-        uut.u_imem.mem[27] = rtype(7'h01,5'd23,5'd15,3'b000,5'd2,OP_ARITH); // mul x2,x15,x23
-        uut.u_imem.mem[28] = rtype(7'h00,5'd2, 5'd1, 3'b000,5'd1,OP_ARITH); // add x1,x1,x2
-        uut.u_imem.mem[29] = rtype(7'h01,5'd24,5'd16,3'b000,5'd2,OP_ARITH); // mul x2,x16,x24
-        uut.u_imem.mem[30] = rtype(7'h00,5'd2, 5'd1, 3'b000,5'd1,OP_ARITH); // add x1,x1,x2
-        uut.u_imem.mem[31] = rtype(7'h01,5'd25,5'd17,3'b000,5'd2,OP_ARITH); // mul x2,x17,x25
-        uut.u_imem.mem[32] = rtype(7'h00,5'd2, 5'd1, 3'b000,5'd1,OP_ARITH); // add x1,x1,x2
+        uut.u_imem.mem[18] = rtype(7'h01,5'd19,5'd11,3'b000,5'd4,OP_ARITH); // mul x4,x11,x19
+        uut.u_imem.mem[19] = rtype(7'h00,5'd2, 5'd1, 3'b000,5'd1,OP_ARITH); // add x1,x1,x2
+        uut.u_imem.mem[20] = rtype(7'h01,5'd20,5'd12,3'b000,5'd2,OP_ARITH); // mul x2,x12,x20
+        uut.u_imem.mem[21] = rtype(7'h00,5'd4, 5'd1, 3'b000,5'd1,OP_ARITH); // add x1,x1,x4
+        uut.u_imem.mem[22] = rtype(7'h01,5'd21,5'd13,3'b000,5'd4,OP_ARITH); // mul x4,x13,x21
+        uut.u_imem.mem[23] = rtype(7'h00,5'd2, 5'd1, 3'b000,5'd1,OP_ARITH); // add x1,x1,x2
+        uut.u_imem.mem[24] = rtype(7'h01,5'd22,5'd14,3'b000,5'd2,OP_ARITH); // mul x2,x14,x22
+        uut.u_imem.mem[25] = rtype(7'h00,5'd4, 5'd1, 3'b000,5'd1,OP_ARITH); // add x1,x1,x4
+        uut.u_imem.mem[26] = rtype(7'h01,5'd23,5'd15,3'b000,5'd4,OP_ARITH); // mul x4,x15,x23
+        uut.u_imem.mem[27] = rtype(7'h00,5'd2, 5'd1, 3'b000,5'd1,OP_ARITH); // add x1,x1,x2
+        uut.u_imem.mem[28] = rtype(7'h01,5'd24,5'd16,3'b000,5'd2,OP_ARITH); // mul x2,x16,x24
+        uut.u_imem.mem[29] = rtype(7'h00,5'd4, 5'd1, 3'b000,5'd1,OP_ARITH); // add x1,x1,x4
+        uut.u_imem.mem[30] = rtype(7'h01,5'd25,5'd17,3'b000,5'd4,OP_ARITH); // mul x4,x17,x25
+        uut.u_imem.mem[31] = rtype(7'h00,5'd2, 5'd1, 3'b000,5'd1,OP_ARITH); // add x1,x1,x2
+        uut.u_imem.mem[32] = rtype(7'h00,5'd4, 5'd1, 3'b000,5'd1,OP_ARITH); // add x1,x1,x4
         // STD ends at mem[32], PC=128. Pipeline needs 4 more cycles to drain.
         uut.u_imem.mem[33] = NOP;
         uut.u_imem.mem[34] = NOP;

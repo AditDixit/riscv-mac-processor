@@ -12,10 +12,14 @@ import rvtools, simrun
 M32 = 0xFFFFFFFF
 
 
-def madd(variant, acc="a0", x="t0", y="t1"):
+def madd(variant, acc="a0", x="t0", y="t1", filler=""):
+    """One multiply-accumulate. `filler` is an independent instruction from
+    the loop body. The mul+add baseline puts it between the mul and the add,
+    as a compiler scheduling for a pipelined multiplier would, so the
+    baseline never pays a multiply-use stall. The MAC version runs it after."""
     if variant == "mac":
-        return f"mac {acc}, {x}, {y}"
-    return f"mul t2, {x}, {y}\nadd {acc}, {acc}, t2"
+        return f"mac {acc}, {x}, {y}\n{filler}"
+    return f"mul t2, {x}, {y}\n{filler}\nadd {acc}, {acc}, t2"
 
 
 def dot_rolled(n, v):
@@ -26,8 +30,7 @@ li t4, {n*4}
 loop:
 lw t0, 0(t3)
 lw t1, {B}(t3)
-{madd(v)}
-addi t3, t3, 4
+{madd(v, filler="addi t3, t3, 4")}
 bne t3, t4, loop
 sw a0, {R}(x0)
 halt: jal x0, 0"""
@@ -39,8 +42,15 @@ def dot_unrolled(n, v):
     body = []
     for i, (x, y) in enumerate(regs):
         body += [f"lw {x}, {4*i}(t3)", f"lw {y}, {B+4*i}(t3)"]
-    for x, y in regs:
-        body.append(madd(v, "a0", x, y))
+    if v == "mac":
+        for x, y in regs:
+            body.append(madd(v, "a0", x, y))
+    else:
+        # Baseline: four independent multiplies into separate temporaries,
+        # then the adds, so no add waits on the multiply just before it.
+        tmps = ["t2", "a1", "a2", "a3"]
+        body += [f"mul {t}, {x}, {y}" for t, (x, y) in zip(tmps, regs)]
+        body += [f"add a0, a0, {t}" for t in tmps]
     return f"""li a0, 0
 li t3, 0
 li t4, {n*4}
@@ -64,8 +74,7 @@ iloop:
 add t5, s2, t3
 lw t0, 0(t5)
 lw t1, {H}(t3)
-{madd(v)}
-addi t3, t3, 4
+{madd(v, filler="addi t3, t3, 4")}
 bne t3, t4, iloop
 sw a0, {Y}(s2)
 addi s2, s2, 4
@@ -88,8 +97,7 @@ ik:
 add t5, s2, t3
 lw t0, 0(t5)
 lw t1, {B}(t6)
-{madd(v)}
-addi t3, t3, 4
+{madd(v, filler="addi t3, t3, 4")}
 addi t6, t6, {n*4}
 bne t3, t4, ik
 add t5, s2, s3
