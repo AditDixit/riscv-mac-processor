@@ -21,7 +21,11 @@
 //   negative  — result[31]          (signed comparisons)
 //   overflow  — signed overflow flag
 // ============================================================
-module alu (
+module alu #(
+    // 1: MUL computed here in one cycle (single-cycle core, unit tests).
+    // 0: no multiplier here; the pipelined core multiplies in mul_pipe.v.
+    parameter HAS_MUL = 1
+) (
     input  wire [31:0] src_a,       // operand A (rs1 or PC)
     input  wire [31:0] src_b,       // operand B (rs2 or immediate)
     input  wire [3:0]  alu_ctrl,    // operation select
@@ -66,7 +70,7 @@ module alu (
             4'b0111: result = $signed(src_a) >>> shamt;            // SRA (arithmetic)
             4'b1000: result = (signed_a < signed_b)  ? 32'b1 : 32'b0; // SLT
             4'b1001: result = (src_a    < src_b)     ? 32'b1 : 32'b0; // SLTU
-            4'b1010: result = src_a * src_b;                       // MUL (low 32)
+            4'b1010: result = HAS_MUL ? src_a * src_b : 32'b0;     // MUL (low 32)
             4'b1011: result = src_b;                               // LUI passthrough
             default: result = 32'b0;
         endcase

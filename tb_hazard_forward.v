@@ -12,18 +12,16 @@ module tb_hazard_forward;
     // ── hazard_unit ports ─────────────────────────────────
     reg        id_ex_mem_read;
     reg [4:0]  id_ex_rd_h, if_id_rs1_h, if_id_rs2_h;
-    reg [4:0]  if_id_rd_h;          // rd field of the instruction in ID
-    reg        if_id_mac_h;         // instruction in ID is a MAC
+    reg        id_ex_mul_h;         // MUL or MAC in EX
     reg        branch_taken, jump_sig;
     wire       stall, flush_if_id, flush_id_ex;
 
     hazard_unit u_haz (
         .id_ex_mem_read(id_ex_mem_read),
+        .id_ex_mul(id_ex_mul_h),
         .id_ex_rd(id_ex_rd_h),
         .if_id_rs1(if_id_rs1_h),
         .if_id_rs2(if_id_rs2_h),
-        .if_id_rd(if_id_rd_h),
-        .if_id_mac(if_id_mac_h),
         .branch_taken(branch_taken),
         .jump(jump_sig),
         .stall(stall),
@@ -71,8 +69,7 @@ module tb_hazard_forward;
     endtask
 
     initial begin
-        if_id_rd_h = 5'd0;
-        if_id_mac_h = 1'b0;
+        id_ex_mul_h = 1'b0;
 
         // ══════════════════════════════════════════════════
         // HAZARD UNIT TESTS
@@ -108,23 +105,32 @@ module tb_hazard_forward;
         if_id_rs1_h=5'd1; if_id_rs2_h=5'd2; #1;
         chk1(stall, 0, "load diff rd: no stall");
 
-        // MAC reads its rd as the accumulator, so a load into that rd
-        // must stall the MAC even though rs1/rs2 do not match.
-        $display("--- Hazard Unit: load -> MAC accumulator (rd) ---");
+        // A load into a MAC's accumulator (rd) needs no stall: the
+        // accumulate happens in MEM and is forwarded from WB.
+        $display("--- Hazard Unit: load -> MAC accumulator (rd only) ---");
         id_ex_mem_read=1; id_ex_rd_h=5'd14;
-        if_id_rs1_h=5'd1; if_id_rs2_h=5'd2;
-        if_id_rd_h=5'd14; if_id_mac_h=1; #1;
-        chk1(stall,       1, "load->MAC acc: stall=1");
-        chk1(flush_id_ex, 1, "load->MAC acc: flush_id_ex=1");
+        if_id_rs1_h=5'd1; if_id_rs2_h=5'd2; #1;
+        chk1(stall, 0, "load->MAC acc only: no stall");
 
-        $display("--- Hazard Unit: MAC with different rd ---");
-        if_id_rd_h=5'd15; if_id_mac_h=1; #1;
-        chk1(stall, 0, "MAC diff rd: no stall");
+        // MUL/MAC results are ready at the end of MEM, like loads
+        $display("--- Hazard Unit: multiply-use ---");
+        id_ex_mem_read=0; id_ex_mul_h=1; id_ex_rd_h=5'd6;
+        if_id_rs1_h=5'd6; if_id_rs2_h=5'd2; #1;
+        chk1(stall,       1, "mul-use rs1: stall=1");
+        chk1(flush_id_ex, 1, "mul-use rs1: flush_id_ex=1");
+        if_id_rs1_h=5'd1; if_id_rs2_h=5'd6; #1;
+        chk1(stall,       1, "mul-use rs2: stall=1");
+        if_id_rs1_h=5'd1; if_id_rs2_h=5'd2; #1;
+        chk1(stall,       0, "mul diff rd: no stall");
+        id_ex_rd_h=5'd0; if_id_rs1_h=5'd0; #1;
+        chk1(stall,       0, "mul rd=x0: no stall");
 
-        $display("--- Hazard Unit: non-MAC, rd field matches ---");
-        if_id_rd_h=5'd14; if_id_mac_h=0; #1;
-        chk1(stall, 0, "non-MAC rd match: no stall");
-        if_id_rd_h=5'd0; if_id_mac_h=0;
+        $display("--- Hazard Unit: multiply-use + taken branch ---");
+        id_ex_rd_h=5'd6; if_id_rs1_h=5'd6; branch_taken=1; #1;
+        chk1(stall,       0, "mul-use + branch: stall=0");
+        chk1(flush_if_id, 1, "mul-use + branch: flush_if_id=1");
+        chk1(flush_id_ex, 1, "mul-use + branch: flush_id_ex=1");
+        branch_taken=0; id_ex_mul_h=0;
 
         $display("--- Hazard Unit: branch taken ---");
         id_ex_mem_read=0; branch_taken=1; jump_sig=0;

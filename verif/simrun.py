@@ -5,7 +5,7 @@ import rvtools
 HERE = os.path.dirname(os.path.abspath(__file__))
 RTL = os.path.dirname(HERE)
 SRCS = ["ALU.v", "Forward_units.v", "Hazard_units.v", "Imem.v", "RegFile.v",
-        "Riscv_pipeline.v", "control.v", "dmem.v", "lsu_align.v", "pipeline_reg.v"]
+        "Riscv_pipeline.v", "control.v", "dmem.v", "lsu_align.v", "mul_pipe.v", "pipeline_reg.v"]
 
 
 def build(workdir):
@@ -28,9 +28,10 @@ def run_rtl(exe, words, data=None, tmp=None):
 
 def run_rtl_stats(exe, words, data=None, tmp=None):
     """Like run_rtl, plus a dict of pipeline performance counters:
-    stall (load-use stall cycles), ctrl (taken branches + jumps, 2-cycle
-    flush each), fwd_ex / fwd_mem (operands bypassed from EX/MEM and MEM/WB),
-    mac_bypass (MAC accumulators taken from the bypass path)."""
+    stall (load-use stall cycles), mul_stall (multiply-use stall cycles),
+    ctrl (taken branches + jumps, 2-cycle flush each), fwd_ex / fwd_mem
+    (operands bypassed from EX/MEM and MEM/WB), mac_bypass (MAC accumulators
+    forwarded from WB into the MEM-stage accumulate)."""
     tmp = tmp or tempfile.mkdtemp()
     p, d, o = (os.path.join(tmp, n) for n in ("prog.hex", "data.hex", "out.txt"))
     rvtools.write_hex(p, words)
