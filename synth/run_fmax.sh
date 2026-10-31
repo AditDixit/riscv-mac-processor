@@ -21,11 +21,11 @@ SEEDS=${*:-1 2 3}
 mkdir -p "$OUT"
 
 SRCS="ALU.v Forward_units.v Hazard_units.v Imem.v RegFile.v control.v \
-      dmem.v lsu_align.v pipeline_reg.v Riscv_pipeline.v"
+      dmem.v lsu_align.v imem_sync.v dmem_sync.v pipeline_reg.v Riscv_pipeline.v"
 
 cd "$ROOT"
 yosys -q -l "$OUT/yosys.log" -p "
-    read_verilog -DFPGA_PROG_PORT $SRCS;
+    read_verilog -DFPGA_PROG_PORT ${EXTRA_DEFINES:-} $SRCS;
     synth_ecp5 -top riscv_pipeline -json $OUT/top.json"
 
 for s in $SEEDS; do

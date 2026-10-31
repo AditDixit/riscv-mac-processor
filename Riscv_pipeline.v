@@ -51,12 +51,26 @@ module riscv_pipeline (
     end
 
     wire [31:0] instr_if;
+`ifdef FPGA_SYNC_MEM
+    // Block-RAM-friendly memory (registered read address, e.g. MAX 10 M9K);
+    // cycle-for-cycle identical to imem.v, see imem_sync.v
+    imem_sync u_imem (
+        .clk(clk), .rst(rst), .en(!stall_pc), .next_addr(pc_next),
+  `ifdef FPGA_PROG_PORT
+        .we(prog_we), .waddr(prog_addr), .wdata(prog_data),
+  `else
+        .we(1'b0), .waddr(8'b0), .wdata(32'b0),
+  `endif
+        .instr(instr_if)
+    );
+`else
     imem u_imem (
-`ifdef FPGA_PROG_PORT
+  `ifdef FPGA_PROG_PORT
         .clk(clk), .we(prog_we), .waddr(prog_addr), .wdata(prog_data),
-`endif
+  `endif
         .addr(pc_if), .instr(instr_if)
     );
+`endif
 
 // ================================================================
 // IF/ID REGISTER
@@ -299,6 +313,14 @@ module riscv_pipeline (
         .load_data(mem_rdata)
     );
 
+`ifdef FPGA_SYNC_MEM
+    // Block-RAM-friendly memory; identical behaviour, see dmem_sync.v
+    dmem_sync u_dmem (
+        .clk(clk), .we(mem_mem_write), .be(mem_byte_en),
+        .waddr(mem_alu_result), .wd(mem_store_data),
+        .raddr_next(ex_result_final), .rd(mem_word)
+    );
+`else
     dmem u_dmem (
         .clk(clk),
         .we(mem_mem_write),
@@ -307,6 +329,7 @@ module riscv_pipeline (
         .wd(mem_store_data),
         .rd(mem_word)
     );
+`endif
 
 // ================================================================
 // MEM/WB REGISTER
